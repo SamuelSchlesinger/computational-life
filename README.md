@@ -31,6 +31,43 @@ space, and drive down the entropy of the population.
 |:---:|
 | ![Torus](images/surface-torus.png) |
 
+### Visualization modes
+
+The default **Hash** view assigns each program an RGB color derived from a hash
+of its bytes. Identical programs get the same color, so you can watch replicators
+flood a region — but the colors are arbitrary, and two very similar programs may
+hash to completely different hues. The alternative color modes map meaningful
+properties of each program onto the surface, letting you explore the structure
+that replicators actually carry:
+
+| Neighbor Similarity | Instruction Density | Unique Bytes |
+|:---:|:---:|:---:|
+| ![Neighbor Similarity](images/torus-neighbor-similarity.png) | ![Instruction Density](images/torus-instruction-density.png) | ![Unique Bytes](images/torus-unique-bytes.png) |
+
+- **Neighbor Similarity** — colors each cell by the average Hamming distance to
+  its geodesic neighbors. This is perhaps the most striking mode: you can watch
+  replicators spread like a virus across the surface, with uniform green
+  territories expanding outward and red/brown fault lines marking where different
+  species collide.
+
+- **Instruction Density** — the fraction of bytes that decode as valid
+  instructions rather than NOPs or junk. As structure emerges, the distribution
+  shifts visibly — though not always in the direction you'd expect, since
+  successful replicators don't necessarily use a high proportion of the
+  instruction set.
+
+- **Unique Bytes** — the number of distinct byte values present in each program.
+  Replicators show obvious structure here: conquered regions become noticeably
+  more uniform compared to the random primordial soup, though the specific
+  patterns vary.
+
+These are just a few of the available color modes — there are others in the
+viewer not shown here. They are all exploratory tools. We don't know many
+generalizable properties of replicators beyond the fact that they clearly
+reduce entropy and show emergent structure across all of these views. The point
+is to give you more angles to watch the dynamics unfold and form your own
+intuitions about what's happening.
+
 ## Features
 
 - **Two instruction sets**: BFF (Brainfuck-family with dual read/write heads)

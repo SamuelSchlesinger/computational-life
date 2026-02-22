@@ -45,16 +45,19 @@ pub enum ColorMode {
     InstructionDensity,
     /// Number of distinct byte values → heatmap.
     UniqueBytes,
+    /// Fraction of neighbors holding an identical program → heatmap.
+    TerritorialDominance,
 }
 
 impl ColorMode {
-    const ALL: [ColorMode; 6] = [
+    const ALL: [ColorMode; 7] = [
         ColorMode::Hash,
         ColorMode::Entropy,
         ColorMode::Zeros,
         ColorMode::NeighborSimilarity,
         ColorMode::InstructionDensity,
         ColorMode::UniqueBytes,
+        ColorMode::TerritorialDominance,
     ];
 
     fn label(self) -> &'static str {
@@ -65,6 +68,7 @@ impl ColorMode {
             ColorMode::NeighborSimilarity => "Neighbor Similarity",
             ColorMode::InstructionDensity => "Instruction Density",
             ColorMode::UniqueBytes => "Unique Bytes",
+            ColorMode::TerritorialDominance => "Territorial Dominance",
         }
     }
 }
@@ -282,6 +286,37 @@ fn fill_colors_unique_bytes(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
     }
 }
 
+/// Fill color buffer by fraction of neighbors holding an identical program → heatmap.
+/// High dominance (deep inside territory) = hot, low (soup/border) = cool.
+fn fill_colors_territorial_dominance(
+    programs: &[Vec<u8>],
+    neighbor_indices: &[usize],
+    neighbor_ranges: &[(usize, usize)],
+    colors: &mut Vec<u8>,
+) {
+    colors.clear();
+    for (i, prog) in programs.iter().enumerate() {
+        let (start, end) = neighbor_ranges[i];
+        let neighbor_count = end - start;
+        if neighbor_count == 0 {
+            colors.extend_from_slice(&[128, 128, 128, 255]);
+            continue;
+        }
+
+        let identical = neighbor_indices[start..end]
+            .iter()
+            .filter(|&&ni| programs[ni] == *prog)
+            .count();
+
+        let t = identical as f32 / neighbor_count as f32;
+        let [r, g, b] = heatmap(t);
+        colors.push(r);
+        colors.push(g);
+        colors.push(b);
+        colors.push(255);
+    }
+}
+
 /// Map a 0..1 value to a blue→cyan→green→yellow→red heatmap.
 fn heatmap(t: f32) -> [u8; 3] {
     let t = t.clamp(0.0, 1.0);
@@ -320,6 +355,9 @@ fn fill_colors_for_mode<S: Substrate>(
             fill_colors_instruction_density(programs, S::is_instruction, colors)
         }
         ColorMode::UniqueBytes => fill_colors_unique_bytes(programs, colors),
+        ColorMode::TerritorialDominance => {
+            fill_colors_territorial_dominance(programs, neighbor_indices, neighbor_ranges, colors)
+        }
     }
 }
 
