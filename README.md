@@ -102,7 +102,3 @@ sets and topologies produce qualitatively different evolutionary dynamics.
 > *Computational Life: How Well-formed, Self-replicating Programs Emerge
 > from Simple Interaction.* arXiv:2406.19108, 2024.
 > https://arxiv.org/abs/2406.19108
-
-## License
-
-MIT
