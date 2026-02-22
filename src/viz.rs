@@ -90,32 +90,94 @@ impl ColorMode {
     }
 }
 
+/// Which surface shape is selected and its per-type parameters.
+#[derive(Clone)]
+pub enum SurfaceShape {
+    Sphere { subdivisions: usize },
+    Torus { major: usize, minor: usize },
+    FlatGrid { width: usize, height: usize },
+    HamsterTunnel { num_spheres: usize, segments: usize },
+}
+
+impl Default for SurfaceShape {
+    fn default() -> Self {
+        SurfaceShape::Sphere { subdivisions: 4 }
+    }
+}
+
+/// Surface geometry parameters — shared between menu and in-sim sidebar.
+#[derive(Clone)]
+pub struct SurfaceParams {
+    pub shape: SurfaceShape,
+    pub seed: u64,
+    pub neighbor_radius: Option<f32>,
+    pub last_error: Option<String>,
+}
+
+impl Default for SurfaceParams {
+    fn default() -> Self {
+        Self {
+            shape: SurfaceShape::default(),
+            seed: 42,
+            neighbor_radius: None,
+            last_error: None,
+        }
+    }
+}
+
+impl SurfaceParams {
+    pub fn from_spec(spec: &SurfaceSpec, seed: u64, neighbor_radius: Option<f32>) -> Self {
+        let shape = match *spec {
+            SurfaceSpec::Sphere { subdivisions } => SurfaceShape::Sphere { subdivisions },
+            SurfaceSpec::Torus { major, minor } => SurfaceShape::Torus { major, minor },
+            SurfaceSpec::FlatGrid { width, height } => SurfaceShape::FlatGrid { width, height },
+            SurfaceSpec::HamsterTunnel { num_spheres, segments, .. } => {
+                SurfaceShape::HamsterTunnel { num_spheres, segments }
+            }
+        };
+        Self { shape, seed, neighbor_radius, last_error: None }
+    }
+
+    pub fn current_spec(&self) -> SurfaceSpec {
+        match self.shape {
+            SurfaceShape::Sphere { subdivisions } => SurfaceSpec::Sphere { subdivisions },
+            SurfaceShape::Torus { major, minor } => SurfaceSpec::Torus { major, minor },
+            SurfaceShape::FlatGrid { width, height } => SurfaceSpec::FlatGrid { width, height },
+            SurfaceShape::HamsterTunnel { num_spheres, segments } => {
+                SurfaceSpec::HamsterTunnel { num_spheres, segments, seed: self.seed }
+            }
+        }
+    }
+}
+
 /// Persistent configuration resource — survives state transitions.
 #[derive(Resource)]
 pub struct MenuConfig {
     pub substrate: SubstrateKind,
-    // Surface
-    pub selected_type: usize,
-    pub sphere_subdivisions: usize,
-    pub torus_major: usize,
-    pub torus_minor: usize,
-    pub grid_width: usize,
-    pub grid_height: usize,
-    pub tunnel_spheres: usize,
-    pub tunnel_segments: usize,
-    pub seed: u64,
-    pub neighbor_radius: Option<f32>,
-    // Simulation
+    pub surface: SurfaceParams,
     pub program_size: usize,
     pub step_limit: usize,
     pub mutation_rate: f64,
     pub max_epochs: usize,
     pub metrics_interval: usize,
-    // Visualization
     pub color_mode: ColorMode,
     pub blur: f32,
-    // Error display
-    pub last_error: Option<String>,
+}
+
+impl Default for MenuConfig {
+    fn default() -> Self {
+        Self {
+            substrate: SubstrateKind::Bff,
+            surface: SurfaceParams::default(),
+            program_size: 64,
+            step_limit: 1 << 13,
+            mutation_rate: 0.00024,
+            max_epochs: 100_000,
+            metrics_interval: 25,
+            color_mode: ColorMode::Hash,
+            blur: 0.0,
+        }
+    }
 }
 
 impl MenuConfig {
@@ -131,45 +193,9 @@ impl MenuConfig {
         metrics_interval: usize,
         blur: f32,
     ) -> Self {
-        let selected_type = match spec {
-            SurfaceSpec::Sphere { .. } => 0,
-            SurfaceSpec::Torus { .. } => 1,
-            SurfaceSpec::FlatGrid { .. } => 2,
-            SurfaceSpec::HamsterTunnel { .. } => 3,
-        };
         Self {
             substrate,
-            selected_type,
-            sphere_subdivisions: match spec {
-                SurfaceSpec::Sphere { subdivisions } => *subdivisions,
-                _ => 4,
-            },
-            torus_major: match spec {
-                SurfaceSpec::Torus { major, .. } => *major,
-                _ => 32,
-            },
-            torus_minor: match spec {
-                SurfaceSpec::Torus { minor, .. } => *minor,
-                _ => 16,
-            },
-            grid_width: match spec {
-                SurfaceSpec::FlatGrid { width, .. } => *width,
-                _ => 64,
-            },
-            grid_height: match spec {
-                SurfaceSpec::FlatGrid { height, .. } => *height,
-                _ => 64,
-            },
-            tunnel_spheres: match spec {
-                SurfaceSpec::HamsterTunnel { num_spheres, .. } => *num_spheres,
-                _ => 10,
-            },
-            tunnel_segments: match spec {
-                SurfaceSpec::HamsterTunnel { segments, .. } => *segments,
-                _ => 24,
-            },
-            seed,
-            neighbor_radius,
+            surface: SurfaceParams::from_spec(spec, seed, neighbor_radius),
             program_size,
             step_limit,
             mutation_rate,
@@ -177,37 +203,6 @@ impl MenuConfig {
             metrics_interval,
             color_mode: ColorMode::Hash,
             blur,
-            last_error: None,
-        }
-    }
-
-    fn current_spec(&self) -> SurfaceSpec {
-        match self.selected_type {
-            0 => SurfaceSpec::Sphere { subdivisions: self.sphere_subdivisions },
-            1 => SurfaceSpec::Torus { major: self.torus_major, minor: self.torus_minor },
-            2 => SurfaceSpec::FlatGrid { width: self.grid_width, height: self.grid_height },
-            3 => SurfaceSpec::HamsterTunnel {
-                num_spheres: self.tunnel_spheres,
-                segments: self.tunnel_segments,
-                seed: self.seed,
-            },
-            _ => SurfaceSpec::Sphere { subdivisions: 4 },
-        }
-    }
-
-    fn to_surface_config_gui(&self) -> SurfaceConfigGui {
-        SurfaceConfigGui {
-            selected_type: self.selected_type,
-            sphere_subdivisions: self.sphere_subdivisions,
-            torus_major: self.torus_major,
-            torus_minor: self.torus_minor,
-            grid_width: self.grid_width,
-            grid_height: self.grid_height,
-            tunnel_spheres: self.tunnel_spheres,
-            tunnel_segments: self.tunnel_segments,
-            seed: self.seed,
-            neighbor_radius: self.neighbor_radius,
-            last_error: None,
         }
     }
 }
@@ -287,50 +282,15 @@ struct LatestSurfaceSnapshot {
 }
 
 #[derive(Resource)]
-struct SurfaceMeshHandle(Handle<Mesh>);
-
-#[derive(Resource)]
-struct NumCells(usize);
-
-#[derive(Resource)]
-struct SimConfig(SoupSurfaceConfig);
-
-/// GUI state for surface configuration panel (in-sim sidebar).
-#[derive(Resource)]
-struct SurfaceConfigGui {
-    selected_type: usize,
-    sphere_subdivisions: usize,
-    torus_major: usize,
-    torus_minor: usize,
-    grid_width: usize,
-    grid_height: usize,
-    tunnel_spheres: usize,
-    tunnel_segments: usize,
-    seed: u64,
-    neighbor_radius: Option<f32>,
-    last_error: Option<String>,
+struct SimResources {
+    mesh_handle: Handle<Mesh>,
+    num_cells: usize,
+    config: SoupSurfaceConfig,
+    pending_rebuild: bool,
 }
 
-impl SurfaceConfigGui {
-    fn current_spec(&self) -> SurfaceSpec {
-        match self.selected_type {
-            0 => SurfaceSpec::Sphere { subdivisions: self.sphere_subdivisions },
-            1 => SurfaceSpec::Torus { major: self.torus_major, minor: self.torus_minor },
-            2 => SurfaceSpec::FlatGrid { width: self.grid_width, height: self.grid_height },
-            3 => SurfaceSpec::HamsterTunnel {
-                num_spheres: self.tunnel_spheres,
-                segments: self.tunnel_segments,
-                seed: self.seed,
-            },
-            _ => SurfaceSpec::Sphere { subdivisions: 4 },
-        }
-    }
-}
-
-#[derive(Resource, Default)]
-struct PendingMeshRebuild {
-    active: bool,
-}
+#[derive(Resource)]
+struct SimSurfaceParams(SurfaceParams);
 
 #[derive(Resource)]
 struct SurfaceRenderData {
@@ -351,6 +311,14 @@ struct OrbitCamera {
 
 // ─── Color / heatmap / blur helpers ──────────────────────────────────────────
 
+#[inline]
+fn push_rgba(colors: &mut Vec<u8>, r: u8, g: u8, b: u8) {
+    colors.push(r);
+    colors.push(g);
+    colors.push(b);
+    colors.push(255);
+}
+
 fn program_to_color(program: &[u8]) -> [u8; 3] {
     let mut hash: u32 = 2166136261;
     for &b in program {
@@ -364,14 +332,11 @@ fn program_to_color(program: &[u8]) -> [u8; 3] {
     ]
 }
 
-fn fill_surface_colors(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
+fn fill_colors_hash(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
     colors.clear();
     for prog in programs {
         let [r, g, b] = program_to_color(prog);
-        colors.push(r);
-        colors.push(g);
-        colors.push(b);
-        colors.push(255);
+        push_rgba(colors, r, g, b);
     }
 }
 
@@ -393,10 +358,7 @@ fn fill_colors_entropy(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
         let max_entropy = (prog.len() as f64).log2().max(1.0);
         let t = (entropy / max_entropy).min(1.0) as f32;
         let [r, g, b] = heatmap(t);
-        colors.push(r);
-        colors.push(g);
-        colors.push(b);
-        colors.push(255);
+        push_rgba(colors, r, g, b);
     }
 }
 
@@ -406,10 +368,7 @@ fn fill_colors_zeros(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
         let zero_count = prog.iter().filter(|&&b| b == 0).count();
         let t = zero_count as f32 / prog.len() as f32;
         let brightness = ((1.0 - t) * 255.0) as u8;
-        colors.push(brightness);
-        colors.push(brightness);
-        colors.push(brightness);
-        colors.push(255);
+        push_rgba(colors, brightness, brightness, brightness);
     }
 }
 
@@ -427,7 +386,7 @@ fn fill_colors_neighbor_similarity(
         let (start, end) = neighbor_ranges[i];
         let neighbor_count = end - start;
         if neighbor_count == 0 || max_bits == 0.0 {
-            colors.extend_from_slice(&[128, 128, 128, 255]);
+            push_rgba(colors, 128, 128, 128);
             continue;
         }
 
@@ -442,10 +401,7 @@ fn fill_colors_neighbor_similarity(
         let avg_dist = total_dist as f32 / neighbor_count as f32;
         let t = (avg_dist / max_bits).min(1.0);
         let [r, g, b] = heatmap(1.0 - t);
-        colors.push(r);
-        colors.push(g);
-        colors.push(b);
-        colors.push(255);
+        push_rgba(colors, r, g, b);
     }
 }
 
@@ -459,10 +415,7 @@ fn fill_colors_instruction_density(
         let count = prog.iter().filter(|&&b| is_instruction(b)).count();
         let t = count as f32 / prog.len().max(1) as f32;
         let [r, g, b] = heatmap(t);
-        colors.push(r);
-        colors.push(g);
-        colors.push(b);
-        colors.push(255);
+        push_rgba(colors, r, g, b);
     }
 }
 
@@ -477,10 +430,7 @@ fn fill_colors_unique_bytes(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
         let max_unique = prog.len().min(256) as f32;
         let t = unique as f32 / max_unique.max(1.0);
         let [r, g, b] = heatmap(1.0 - t);
-        colors.push(r);
-        colors.push(g);
-        colors.push(b);
-        colors.push(255);
+        push_rgba(colors, r, g, b);
     }
 }
 
@@ -495,7 +445,7 @@ fn fill_colors_territorial_dominance(
         let (start, end) = neighbor_ranges[i];
         let neighbor_count = end - start;
         if neighbor_count == 0 {
-            colors.extend_from_slice(&[128, 128, 128, 255]);
+            push_rgba(colors, 128, 128, 128);
             continue;
         }
 
@@ -506,10 +456,7 @@ fn fill_colors_territorial_dominance(
 
         let t = identical as f32 / neighbor_count as f32;
         let [r, g, b] = heatmap(t);
-        colors.push(r);
-        colors.push(g);
-        colors.push(b);
-        colors.push(255);
+        push_rgba(colors, r, g, b);
     }
 }
 
@@ -539,7 +486,7 @@ fn fill_colors_for_mode<S: Substrate>(
     colors: &mut Vec<u8>,
 ) {
     match mode {
-        ColorMode::Hash => fill_surface_colors(programs, colors),
+        ColorMode::Hash => fill_colors_hash(programs, colors),
         ColorMode::Entropy => fill_colors_entropy(programs, colors),
         ColorMode::Zeros => fill_colors_zeros(programs, colors),
         ColorMode::NeighborSimilarity => {
@@ -860,49 +807,35 @@ fn render_menu_ui(
                 });
             ui.add_space(12.0);
 
-            // Reborrow to allow disjoint field borrows.
-            let m = &mut *menu;
-
             // Surface parameters (shared helper).
             ui.heading("Surface");
             ui.add_space(4.0);
-            render_surface_params(
-                ui,
-                &mut m.selected_type,
-                &mut m.sphere_subdivisions,
-                &mut m.torus_major,
-                &mut m.torus_minor,
-                &mut m.grid_width,
-                &mut m.grid_height,
-                &mut m.tunnel_spheres,
-                &mut m.tunnel_segments,
-                &mut m.seed,
-            );
+            render_surface_params(ui, &mut menu.surface);
             ui.add_space(12.0);
 
             // Simulation parameters.
             ui.heading("Simulation");
             ui.add_space(4.0);
 
-            let mut ps = m.program_size as u32;
+            let mut ps = menu.program_size as u32;
             ui.add(egui::Slider::new(&mut ps, 8..=256).text("Program size"));
-            m.program_size = ps as usize;
+            menu.program_size = ps as usize;
 
-            let mut sl = m.step_limit as f64;
+            let mut sl = menu.step_limit as f64;
             ui.add(egui::Slider::new(&mut sl, 64.0..=1_000_000.0).logarithmic(true).text("Step limit"));
-            m.step_limit = sl as usize;
+            menu.step_limit = sl as usize;
 
-            let mut mr = m.mutation_rate;
+            let mut mr = menu.mutation_rate;
             ui.add(egui::Slider::new(&mut mr, 0.0..=0.01).logarithmic(true).text("Mutation rate"));
-            m.mutation_rate = mr;
+            menu.mutation_rate = mr;
 
-            let mut me = m.max_epochs as f64;
+            let mut me = menu.max_epochs as f64;
             ui.add(egui::Slider::new(&mut me, 100.0..=10_000_000.0).logarithmic(true).text("Max epochs"));
-            m.max_epochs = me as usize;
+            menu.max_epochs = me as usize;
 
-            let mut mi = m.metrics_interval as f64;
+            let mut mi = menu.metrics_interval as f64;
             ui.add(egui::Slider::new(&mut mi, 1.0..=10_000.0).logarithmic(true).text("Metrics interval"));
-            m.metrics_interval = mi as usize;
+            menu.metrics_interval = mi as usize;
 
             ui.add_space(12.0);
 
@@ -911,34 +844,34 @@ fn render_menu_ui(
             ui.add_space(4.0);
 
             egui::ComboBox::from_label("Color mode")
-                .selected_text(m.color_mode.label())
+                .selected_text(menu.color_mode.label())
                 .show_ui(ui, |ui| {
                     for mode in ColorMode::ALL {
-                        ui.selectable_value(&mut m.color_mode, mode, mode.label());
+                        ui.selectable_value(&mut menu.color_mode, mode, mode.label());
                     }
                 });
 
-            ui.add(egui::Slider::new(&mut m.blur, 0.0..=1.0).text("Blur"));
+            ui.add(egui::Slider::new(&mut menu.blur, 0.0..=1.0).text("Blur"));
 
             ui.add_space(20.0);
 
             // Start button.
             ui.vertical_centered(|ui| {
                 if ui.button("Start Simulation").clicked() {
-                    m.last_error = None;
-                    let spec = m.current_spec();
+                    menu.surface.last_error = None;
+                    let spec = menu.surface.current_spec();
                     match spec.build() {
                         Ok(_) => {
                             next_state.set(AppState::Simulating);
                         }
                         Err(e) => {
-                            m.last_error = Some(e);
+                            menu.surface.last_error = Some(e);
                         }
                     }
                 }
             });
 
-            if let Some(ref err) = m.last_error {
+            if let Some(ref err) = menu.surface.last_error {
                 ui.add_space(8.0);
                 ui.colored_label(egui::Color32::RED, err);
             }
@@ -955,9 +888,9 @@ fn enter_simulation(
     menu: Res<MenuConfig>,
 ) {
     // Build mesh from spec.
-    let spec = menu.current_spec();
+    let spec = menu.surface.current_spec();
     let mut surface_mesh = spec.build().expect("spec was validated in menu");
-    surface_mesh.compute_neighbors(menu.neighbor_radius);
+    surface_mesh.compute_neighbors(menu.surface.neighbor_radius);
 
     let num_cells = surface_mesh.num_cells();
 
@@ -978,7 +911,7 @@ fn enter_simulation(
         menu.substrate,
         surface_mesh,
         config,
-        menu.seed,
+        menu.surface.seed,
         menu.max_epochs,
         menu.metrics_interval,
         menu.blur,
@@ -1003,10 +936,7 @@ fn enter_simulation(
         color_mode: menu.color_mode,
         blur: menu.blur,
     });
-    commands.insert_resource(NumCells(num_cells));
-    commands.insert_resource(SimConfig(config));
-    commands.insert_resource(menu.to_surface_config_gui());
-    commands.insert_resource(PendingMeshRebuild::default());
+    commands.insert_resource(SimSurfaceParams(menu.surface.clone()));
     commands.insert_resource(SurfaceRenderData {
         positions: render_positions.clone(),
         normals: render_normals.clone(),
@@ -1043,7 +973,12 @@ fn enter_simulation(
         SimEntity,
     ));
 
-    commands.insert_resource(SurfaceMeshHandle(mesh_handle));
+    commands.insert_resource(SimResources {
+        mesh_handle,
+        num_cells,
+        config,
+        pending_rebuild: false,
+    });
 
     // Camera with orbit controls.
     let center_v = Vec3::from_array(center);
@@ -1095,11 +1030,8 @@ fn exit_simulation(
     commands.remove_resource::<LatestSurfaceSnapshot>();
     commands.remove_resource::<PlaybackState>();
     commands.remove_resource::<VizSettings>();
-    commands.remove_resource::<NumCells>();
-    commands.remove_resource::<SimConfig>();
-    commands.remove_resource::<SurfaceConfigGui>();
-    commands.remove_resource::<SurfaceMeshHandle>();
-    commands.remove_resource::<PendingMeshRebuild>();
+    commands.remove_resource::<SimResources>();
+    commands.remove_resource::<SimSurfaceParams>();
     commands.remove_resource::<SurfaceRenderData>();
     commands.remove_resource::<AmbientLight>();
 }
@@ -1133,25 +1065,23 @@ fn drain_surface_snapshot(
 
 fn update_surface_mesh(
     mut meshes: ResMut<Assets<Mesh>>,
-    handle: Option<Res<SurfaceMeshHandle>>,
+    sim: Res<SimResources>,
     mut latest: ResMut<LatestSurfaceSnapshot>,
-    num_cells: Res<NumCells>,
 ) {
     if !latest.dirty {
         return;
     }
-    let Some(handle) = handle else { return };
     let Some(ref snap) = latest.snapshot else { return };
-    let Some(mesh) = meshes.get_mut(&handle.0) else { return };
+    let Some(mesh) = meshes.get_mut(&sim.mesh_handle) else { return };
 
-    let expected_len = num_cells.0 * 4;
+    let expected_len = sim.num_cells * 4;
     if snap.colors.len() != expected_len {
         latest.dirty = false;
         return;
     }
 
-    let mut vertex_colors: Vec<[f32; 4]> = Vec::with_capacity(num_cells.0 * 3);
-    for i in 0..num_cells.0 {
+    let mut vertex_colors: Vec<[f32; 4]> = Vec::with_capacity(sim.num_cells * 3);
+    for i in 0..sim.num_cells {
         let idx = i * 4;
         let r = snap.colors[idx] as f32 / 255.0;
         let g = snap.colors[idx + 1] as f32 / 255.0;
@@ -1226,12 +1156,10 @@ fn render_ui_surface(
     mut playback: ResMut<PlaybackState>,
     mut viz: ResMut<VizSettings>,
     commander: Res<SimCommander>,
-    mut gui: ResMut<SurfaceConfigGui>,
-    mut num_cells: ResMut<NumCells>,
+    mut gui: ResMut<SimSurfaceParams>,
+    mut sim: ResMut<SimResources>,
     mut render_data: ResMut<SurfaceRenderData>,
     mut latest_snap: ResMut<LatestSurfaceSnapshot>,
-    mut pending_rebuild: ResMut<PendingMeshRebuild>,
-    sim_config: Res<SimConfig>,
     mut next_state: ResMut<NextState<AppState>>,
     mut menu: ResMut<MenuConfig>,
     windows: Query<&Window>,
@@ -1244,19 +1172,9 @@ fn render_ui_surface(
     egui::SidePanel::right("metrics_panel").min_width(350.0).show(ctx, |ui| {
         // Back to Menu button at the top.
         if ui.button("Back to Menu").clicked() {
-            // Copy current settings back into MenuConfig.
             menu.color_mode = viz.color_mode;
             menu.blur = viz.blur;
-            menu.selected_type = gui.selected_type;
-            menu.sphere_subdivisions = gui.sphere_subdivisions;
-            menu.torus_major = gui.torus_major;
-            menu.torus_minor = gui.torus_minor;
-            menu.grid_width = gui.grid_width;
-            menu.grid_height = gui.grid_height;
-            menu.tunnel_spheres = gui.tunnel_spheres;
-            menu.tunnel_segments = gui.tunnel_segments;
-            menu.seed = gui.seed;
-            menu.neighbor_radius = gui.neighbor_radius;
+            menu.surface = gui.0.clone();
             next_state.set(AppState::Menu);
         }
         ui.separator();
@@ -1264,9 +1182,9 @@ fn render_ui_surface(
         render_controls_section(ui, &history, &mut playback, &commander);
         ui.separator();
         render_surface_config(
-            ui, &mut gui, &mut num_cells, &mut render_data,
+            ui, &mut gui, &mut sim, &mut render_data,
             &mut history, &mut latest_snap, &commander,
-            &mut pending_rebuild, &sim_config.0, &mut playback,
+            &mut playback,
         );
         ui.separator();
         render_viz_settings(ui, &mut viz, &commander);
@@ -1284,18 +1202,16 @@ fn render_ui_surface(
 
 fn apply_mesh_rebuild(
     mut meshes: ResMut<Assets<Mesh>>,
-    handle: Option<Res<SurfaceMeshHandle>>,
+    mut sim: ResMut<SimResources>,
     render_data: Res<SurfaceRenderData>,
-    mut pending: ResMut<PendingMeshRebuild>,
     mut query: Query<(&mut OrbitCamera, &mut Transform)>,
 ) {
-    if !pending.active {
+    if !sim.pending_rebuild {
         return;
     }
-    pending.active = false;
+    sim.pending_rebuild = false;
 
-    let Some(handle) = handle else { return };
-    let Some(mesh) = meshes.get_mut(&handle.0) else { return };
+    let Some(mesh) = meshes.get_mut(&sim.mesh_handle) else { return };
 
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, render_data.positions.clone());
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, render_data.normals.clone());
@@ -1318,77 +1234,81 @@ fn apply_mesh_rebuild(
 
 /// Render surface type combo, per-type parameter sliders, seed field, and face count.
 /// Shared between the menu UI and the in-sim sidebar.
-fn render_surface_params(
-    ui: &mut egui::Ui,
-    selected_type: &mut usize,
-    sphere_subdivisions: &mut usize,
-    torus_major: &mut usize,
-    torus_minor: &mut usize,
-    grid_width: &mut usize,
-    grid_height: &mut usize,
-    tunnel_spheres: &mut usize,
-    tunnel_segments: &mut usize,
-    seed: &mut u64,
-) {
+fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
     let type_labels = ["Sphere", "Torus", "Flat Grid", "Hamster Tunnel"];
+    let current = match params.shape {
+        SurfaceShape::Sphere { .. } => 0,
+        SurfaceShape::Torus { .. } => 1,
+        SurfaceShape::FlatGrid { .. } => 2,
+        SurfaceShape::HamsterTunnel { .. } => 3,
+    };
+    let mut selected = current;
     egui::ComboBox::from_label("Type")
-        .selected_text(type_labels[*selected_type])
+        .selected_text(type_labels[selected])
         .show_ui(ui, |ui| {
             for (i, label) in type_labels.iter().enumerate() {
-                ui.selectable_value(selected_type, i, *label);
+                ui.selectable_value(&mut selected, i, *label);
             }
         });
 
-    ui.add_space(4.0);
-
-    match *selected_type {
-        0 => {
-            let mut sub = *sphere_subdivisions as u32;
-            ui.add(egui::Slider::new(&mut sub, 0..=6).text("Subdivisions"));
-            *sphere_subdivisions = sub as usize;
-            let face_count = 20 * 4usize.pow(sub);
-            ui.label(format!("Faces: {face_count}"));
-        }
-        1 => {
-            let mut major = *torus_major as u32;
-            let mut minor = *torus_minor as u32;
-            ui.add(egui::Slider::new(&mut major, 3..=128).text("Major segments"));
-            ui.add(egui::Slider::new(&mut minor, 3..=64).text("Minor segments"));
-            *torus_major = major as usize;
-            *torus_minor = minor as usize;
-            ui.label(format!("Faces: {}", 2 * *torus_major * *torus_minor));
-        }
-        2 => {
-            let mut w = *grid_width as u32;
-            let mut h = *grid_height as u32;
-            ui.add(egui::Slider::new(&mut w, 1..=256).text("Width"));
-            ui.add(egui::Slider::new(&mut h, 1..=256).text("Height"));
-            *grid_width = w as usize;
-            *grid_height = h as usize;
-            ui.label(format!("Faces: {}", 2 * *grid_width * *grid_height));
-        }
-        3 => {
-            let mut spheres = *tunnel_spheres as u32;
-            let mut segs = *tunnel_segments as u32;
-            ui.add(egui::Slider::new(&mut spheres, 3..=50).text("Spheres"));
-            ui.add(egui::Slider::new(&mut segs, 3..=48).text("Segments"));
-            *tunnel_spheres = spheres as usize;
-            *tunnel_segments = segs as usize;
-            let rings_per_seg = 16usize;
-            let total_rings = *tunnel_spheres * rings_per_seg;
-            ui.label(format!("Faces: {}", 2 * *tunnel_segments * total_rings));
-        }
-        _ => {}
+    if selected != current {
+        params.shape = match selected {
+            1 => SurfaceShape::Torus { major: 32, minor: 16 },
+            2 => SurfaceShape::FlatGrid { width: 64, height: 64 },
+            3 => SurfaceShape::HamsterTunnel { num_spheres: 10, segments: 24 },
+            _ => SurfaceShape::Sphere { subdivisions: 4 },
+        };
     }
 
     ui.add_space(4.0);
 
-    let mut seed_str = seed.to_string();
+    match &mut params.shape {
+        SurfaceShape::Sphere { subdivisions } => {
+            let mut sub = *subdivisions as u32;
+            ui.add(egui::Slider::new(&mut sub, 0..=6).text("Subdivisions"));
+            *subdivisions = sub as usize;
+            let face_count = 20 * 4usize.pow(sub);
+            ui.label(format!("Faces: {face_count}"));
+        }
+        SurfaceShape::Torus { major, minor } => {
+            let mut maj = *major as u32;
+            let mut min = *minor as u32;
+            ui.add(egui::Slider::new(&mut maj, 3..=128).text("Major segments"));
+            ui.add(egui::Slider::new(&mut min, 3..=64).text("Minor segments"));
+            *major = maj as usize;
+            *minor = min as usize;
+            ui.label(format!("Faces: {}", 2 * *major * *minor));
+        }
+        SurfaceShape::FlatGrid { width, height } => {
+            let mut w = *width as u32;
+            let mut h = *height as u32;
+            ui.add(egui::Slider::new(&mut w, 1..=256).text("Width"));
+            ui.add(egui::Slider::new(&mut h, 1..=256).text("Height"));
+            *width = w as usize;
+            *height = h as usize;
+            ui.label(format!("Faces: {}", 2 * *width * *height));
+        }
+        SurfaceShape::HamsterTunnel { num_spheres, segments } => {
+            let mut spheres = *num_spheres as u32;
+            let mut segs = *segments as u32;
+            ui.add(egui::Slider::new(&mut spheres, 3..=50).text("Spheres"));
+            ui.add(egui::Slider::new(&mut segs, 3..=48).text("Segments"));
+            *num_spheres = spheres as usize;
+            *segments = segs as usize;
+            let rings_per_seg = 16usize;
+            let total_rings = *num_spheres * rings_per_seg;
+            ui.label(format!("Faces: {}", 2 * *segments * total_rings));
+        }
+    }
+
+    ui.add_space(4.0);
+
+    let mut seed_str = params.seed.to_string();
     ui.horizontal(|ui| {
         ui.label("Seed:");
         if ui.text_edit_singleline(&mut seed_str).changed() {
             if let Ok(s) = seed_str.parse::<u64>() {
-                *seed = s;
+                params.seed = s;
             }
         }
     });
@@ -1396,40 +1316,27 @@ fn render_surface_params(
 
 fn render_surface_config(
     ui: &mut egui::Ui,
-    gui: &mut SurfaceConfigGui,
-    num_cells: &mut NumCells,
+    gui: &mut SimSurfaceParams,
+    sim: &mut SimResources,
     render_data: &mut SurfaceRenderData,
     history: &mut SimulationHistory,
     latest_snap: &mut LatestSurfaceSnapshot,
     commander: &SimCommander,
-    pending_rebuild: &mut PendingMeshRebuild,
-    config: &SoupSurfaceConfig,
     playback: &mut PlaybackState,
 ) {
     ui.heading("Surface");
     ui.add_space(4.0);
 
-    render_surface_params(
-        ui,
-        &mut gui.selected_type,
-        &mut gui.sphere_subdivisions,
-        &mut gui.torus_major,
-        &mut gui.torus_minor,
-        &mut gui.grid_width,
-        &mut gui.grid_height,
-        &mut gui.tunnel_spheres,
-        &mut gui.tunnel_segments,
-        &mut gui.seed,
-    );
+    render_surface_params(ui, &mut gui.0);
 
     ui.add_space(4.0);
 
     if ui.button("Generate").clicked() {
-        gui.last_error = None;
-        let spec = gui.current_spec();
+        gui.0.last_error = None;
+        let spec = gui.0.current_spec();
         match spec.build() {
             Ok(mut mesh) => {
-                mesh.compute_neighbors(gui.neighbor_radius);
+                mesh.compute_neighbors(gui.0.neighbor_radius);
                 let num = mesh.num_cells();
 
                 let positions = build_render_positions(&mesh);
@@ -1441,7 +1348,7 @@ fn render_surface_config(
                 render_data.num_render_vertices = num * 3;
                 render_data.center = center;
                 render_data.radius = radius;
-                num_cells.0 = num;
+                sim.num_cells = num;
 
                 history.entries.clear();
                 history.awaiting_reset = true;
@@ -1450,21 +1357,21 @@ fn render_surface_config(
 
                 let _ = commander.0.send(SimCommand::ResetSurface {
                     mesh,
-                    config: *config,
-                    seed: gui.seed,
+                    config: sim.config,
+                    seed: gui.0.seed,
                 });
                 let _ = commander.0.send(SimCommand::Play);
                 playback.playing = true;
 
-                pending_rebuild.active = true;
+                sim.pending_rebuild = true;
             }
             Err(e) => {
-                gui.last_error = Some(e);
+                gui.0.last_error = Some(e);
             }
         }
     }
 
-    if let Some(ref err) = gui.last_error {
+    if let Some(ref err) = gui.0.last_error {
         ui.colored_label(egui::Color32::RED, err);
     }
 
