@@ -94,6 +94,10 @@ impl Substrate for Bff {
 
         steps
     }
+
+    fn is_instruction(byte: u8) -> bool {
+        matches!(byte, LESS | GREATER | LBRACE | RBRACE | MINUS | PLUS | DOT | COMMA | LBRACKET | RBRACKET)
+    }
 }
 
 /// Build a bracket-match lookup table for the tape.

@@ -30,10 +30,51 @@ pub struct SurfaceSnapshot {
     pub colors: Vec<u8>,
 }
 
+/// Available color modes for surface visualization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorMode {
+    /// FNV hash of program bytes → RGB.
+    Hash,
+    /// Shannon entropy of byte distribution → heatmap.
+    Entropy,
+    /// Fraction of zero-valued bytes → gradient.
+    Zeros,
+    /// Average Hamming distance to geodesic neighbors → heatmap.
+    NeighborSimilarity,
+    /// Fraction of bytes that are valid instructions → heatmap.
+    InstructionDensity,
+    /// Number of distinct byte values → heatmap.
+    UniqueBytes,
+}
+
+impl ColorMode {
+    const ALL: [ColorMode; 6] = [
+        ColorMode::Hash,
+        ColorMode::Entropy,
+        ColorMode::Zeros,
+        ColorMode::NeighborSimilarity,
+        ColorMode::InstructionDensity,
+        ColorMode::UniqueBytes,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            ColorMode::Hash => "Hash",
+            ColorMode::Entropy => "Byte Entropy",
+            ColorMode::Zeros => "Zero Fraction",
+            ColorMode::NeighborSimilarity => "Neighbor Similarity",
+            ColorMode::InstructionDensity => "Instruction Density",
+            ColorMode::UniqueBytes => "Unique Bytes",
+        }
+    }
+}
+
 /// Commands sent from render thread to sim thread.
 pub enum SimCommand {
     Play,
     Pause,
+    SetColorMode(ColorMode),
+    SetBlur(f32),
 }
 
 /// Bevy resource wrapping the metrics channel receiver (Mutex for Sync).
@@ -55,6 +96,13 @@ struct SimulationHistory {
 struct PlaybackState {
     playing: bool,
     max_epochs: usize,
+}
+
+/// Bevy resource for visualization settings (color mode + blur), controlled by GUI.
+#[derive(Resource)]
+struct VizSettings {
+    color_mode: ColorMode,
+    blur: f32,
 }
 
 // ─── Surface-specific resources ──────────────────────────────────────────────
@@ -110,6 +158,168 @@ fn fill_surface_colors(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
         colors.push(g);
         colors.push(b);
         colors.push(255);
+    }
+}
+
+/// Fill color buffer by Shannon entropy of program byte distribution → heatmap.
+fn fill_colors_entropy(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
+    colors.clear();
+    for prog in programs {
+        let mut counts = [0u32; 256];
+        for &b in prog {
+            counts[b as usize] += 1;
+        }
+        let n = prog.len() as f64;
+        let mut entropy = 0.0f64;
+        for &c in &counts {
+            if c > 0 {
+                let p = c as f64 / n;
+                entropy -= p * p.log2();
+            }
+        }
+        // Max entropy for 256 symbols is 8.0 bits, but for short programs
+        // the practical max is log2(program_size).
+        let max_entropy = (prog.len() as f64).log2().max(1.0);
+        let t = (entropy / max_entropy).min(1.0) as f32;
+        let [r, g, b] = heatmap(t);
+        colors.push(r);
+        colors.push(g);
+        colors.push(b);
+        colors.push(255);
+    }
+}
+
+/// Fill color buffer by fraction of zero bytes → dark-to-bright gradient.
+fn fill_colors_zeros(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
+    colors.clear();
+    for prog in programs {
+        let zero_count = prog.iter().filter(|&&b| b == 0).count();
+        let t = zero_count as f32 / prog.len() as f32;
+        // Invert: more zeros = darker (poisoned), fewer = brighter.
+        let brightness = ((1.0 - t) * 255.0) as u8;
+        colors.push(brightness);
+        colors.push(brightness);
+        colors.push(brightness);
+        colors.push(255);
+    }
+}
+
+/// Fill color buffer by average Hamming distance to geodesic neighbors → heatmap.
+/// Low distance (similar to neighbors) = cool, high distance (boundary) = hot.
+fn fill_colors_neighbor_similarity(
+    programs: &[Vec<u8>],
+    neighbor_indices: &[usize],
+    neighbor_ranges: &[(usize, usize)],
+    colors: &mut Vec<u8>,
+) {
+    colors.clear();
+    let ps = programs.first().map_or(0, |p| p.len());
+    let max_bits = (ps * 8) as f32;
+
+    for (i, prog) in programs.iter().enumerate() {
+        let (start, end) = neighbor_ranges[i];
+        let neighbor_count = end - start;
+        if neighbor_count == 0 || max_bits == 0.0 {
+            colors.extend_from_slice(&[128, 128, 128, 255]);
+            continue;
+        }
+
+        let mut total_dist = 0u32;
+        for &ni in &neighbor_indices[start..end] {
+            let dist: u32 = prog.iter().zip(programs[ni].iter())
+                .map(|(a, b)| (a ^ b).count_ones())
+                .sum();
+            total_dist += dist;
+        }
+
+        let avg_dist = total_dist as f32 / neighbor_count as f32;
+        let t = (avg_dist / max_bits).min(1.0);
+        // Invert: similar neighbors = bright (colony), dissimilar = dark (boundary).
+        let [r, g, b] = heatmap(1.0 - t);
+        colors.push(r);
+        colors.push(g);
+        colors.push(b);
+        colors.push(255);
+    }
+}
+
+/// Fill color buffer by fraction of bytes that are valid instructions → heatmap.
+fn fill_colors_instruction_density(
+    programs: &[Vec<u8>],
+    is_instruction: fn(u8) -> bool,
+    colors: &mut Vec<u8>,
+) {
+    colors.clear();
+    for prog in programs {
+        let count = prog.iter().filter(|&&b| is_instruction(b)).count();
+        let t = count as f32 / prog.len().max(1) as f32;
+        let [r, g, b] = heatmap(t);
+        colors.push(r);
+        colors.push(g);
+        colors.push(b);
+        colors.push(255);
+    }
+}
+
+/// Fill color buffer by number of distinct byte values → heatmap.
+fn fill_colors_unique_bytes(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
+    colors.clear();
+    for prog in programs {
+        let mut seen = [false; 256];
+        for &b in prog {
+            seen[b as usize] = true;
+        }
+        let unique = seen.iter().filter(|&&s| s).count();
+        // Normalize: max possible is min(program_size, 256).
+        let max_unique = prog.len().min(256) as f32;
+        let t = unique as f32 / max_unique.max(1.0);
+        // Invert: few unique bytes (replicator) = hot, many (random) = cool.
+        let [r, g, b] = heatmap(1.0 - t);
+        colors.push(r);
+        colors.push(g);
+        colors.push(b);
+        colors.push(255);
+    }
+}
+
+/// Map a 0..1 value to a blue→cyan→green→yellow→red heatmap.
+fn heatmap(t: f32) -> [u8; 3] {
+    let t = t.clamp(0.0, 1.0);
+    let (r, g, b) = if t < 0.25 {
+        let s = t / 0.25;
+        (0.0, s, 1.0)
+    } else if t < 0.5 {
+        let s = (t - 0.25) / 0.25;
+        (0.0, 1.0, 1.0 - s)
+    } else if t < 0.75 {
+        let s = (t - 0.5) / 0.25;
+        (s, 1.0, 0.0)
+    } else {
+        let s = (t - 0.75) / 0.25;
+        (1.0, 1.0 - s, 0.0)
+    };
+    [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8]
+}
+
+/// Fill color buffer using the selected color mode.
+fn fill_colors_for_mode<S: Substrate>(
+    mode: ColorMode,
+    programs: &[Vec<u8>],
+    neighbor_indices: &[usize],
+    neighbor_ranges: &[(usize, usize)],
+    colors: &mut Vec<u8>,
+) {
+    match mode {
+        ColorMode::Hash => fill_surface_colors(programs, colors),
+        ColorMode::Entropy => fill_colors_entropy(programs, colors),
+        ColorMode::Zeros => fill_colors_zeros(programs, colors),
+        ColorMode::NeighborSimilarity => {
+            fill_colors_neighbor_similarity(programs, neighbor_indices, neighbor_ranges, colors)
+        }
+        ColorMode::InstructionDensity => {
+            fill_colors_instruction_density(programs, S::is_instruction, colors)
+        }
+        ColorMode::UniqueBytes => fill_colors_unique_bytes(programs, colors),
     }
 }
 
@@ -224,6 +434,7 @@ fn sim_thread_loop<S: Substrate>(
             match cmd {
                 SimCommand::Play => paused = false,
                 SimCommand::Pause => paused = true,
+                SimCommand::SetColorMode(_) | SimCommand::SetBlur(_) => {}
             }
         }
 
@@ -308,6 +519,10 @@ pub fn run_viz_surface<S: Substrate + Send + Sync + 'static>(
             playing: true,
             max_epochs,
         })
+        .insert_resource(VizSettings {
+            color_mode: ColorMode::Hash,
+            blur,
+        })
         .insert_resource(NumCells(num_cells))
         .insert_resource(SurfaceRenderData {
             positions: render_positions,
@@ -378,6 +593,8 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
     let mut soup = SoupSurface::new(mesh, config, seed);
     let mut paused = false;
     let mut epoch = 0usize;
+    let mut color_mode = ColorMode::Hash;
+    let mut blur = blur;
 
     let num_cells = soup.mesh.num_cells();
     let mut color_buf: Vec<u8> = Vec::with_capacity(num_cells * 4);
@@ -386,7 +603,7 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
 
     // Send initial state.
     let _ = metrics_tx.send(compute_metrics_surface(&soup, 0, &mut pop_buf));
-    fill_surface_colors(&soup.programs, &mut color_buf);
+    fill_colors_for_mode::<S>(color_mode, &soup.programs, &soup.mesh.neighbor_indices, &soup.mesh.neighbor_ranges, &mut color_buf);
     blur_surface_colors(&mut color_buf, &mut blur_scratch, face_adjacency, blur);
     let _ = snap_tx.send(SurfaceSnapshot { colors: color_buf.clone() });
 
@@ -399,6 +616,8 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
             match cmd {
                 SimCommand::Play => paused = false,
                 SimCommand::Pause => paused = true,
+                SimCommand::SetColorMode(mode) => color_mode = mode,
+                SimCommand::SetBlur(b) => blur = b,
             }
         }
 
@@ -414,7 +633,7 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
         // Send snapshot at most ~60fps.
         let now = std::time::Instant::now();
         if now.duration_since(last_snap_send) >= snap_interval || epoch == max_epochs {
-            fill_surface_colors(&soup.programs, &mut color_buf);
+            fill_colors_for_mode::<S>(color_mode, &soup.programs, &soup.mesh.neighbor_indices, &soup.mesh.neighbor_ranges, &mut color_buf);
             blur_surface_colors(&mut color_buf, &mut blur_scratch, face_adjacency, blur);
             if snap_tx.send(SurfaceSnapshot { colors: color_buf.clone() }).is_err() {
                 break;
@@ -621,12 +840,15 @@ fn render_ui_surface(
     mut contexts: EguiContexts,
     history: Res<SimulationHistory>,
     mut playback: ResMut<PlaybackState>,
+    mut viz: ResMut<VizSettings>,
     commander: Res<SimCommander>,
 ) {
     let ctx = contexts.ctx_mut();
 
     egui::SidePanel::right("metrics_panel").min_width(350.0).show(ctx, |ui| {
         render_controls_section(ui, &history, &mut playback, &commander);
+        ui.separator();
+        render_viz_settings(ui, &mut viz, &commander);
         ui.separator();
 
         let entries = &history.entries;
@@ -637,6 +859,40 @@ fn render_ui_surface(
         let plot_height = (available_height - 40.0) / 3.0;
         render_time_series_plots_compact(ui, entries, plot_height);
     });
+}
+
+/// Render the Visualization settings section (color mode + blur slider).
+fn render_viz_settings(
+    ui: &mut egui::Ui,
+    viz: &mut VizSettings,
+    commander: &SimCommander,
+) {
+    ui.heading("Visualization");
+    ui.add_space(4.0);
+
+    // Color mode selector.
+    let prev_mode = viz.color_mode;
+    egui::ComboBox::from_label("Color mode")
+        .selected_text(viz.color_mode.label())
+        .show_ui(ui, |ui| {
+            for mode in ColorMode::ALL {
+                ui.selectable_value(&mut viz.color_mode, mode, mode.label());
+            }
+        });
+    if viz.color_mode != prev_mode {
+        let _ = commander.0.send(SimCommand::SetColorMode(viz.color_mode));
+    }
+
+    ui.add_space(4.0);
+
+    // Blur slider.
+    let prev_blur = viz.blur;
+    ui.add(egui::Slider::new(&mut viz.blur, 0.0..=1.0).text("Blur"));
+    if (viz.blur - prev_blur).abs() > f32::EPSILON {
+        let _ = commander.0.send(SimCommand::SetBlur(viz.blur));
+    }
+
+    ui.add_space(8.0);
 }
 
 // ─── Shared systems ──────────────────────────────────────────────────────────

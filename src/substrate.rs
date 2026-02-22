@@ -12,4 +12,8 @@ pub trait Substrate {
     ///
     /// Returns the number of steps actually executed.
     fn execute(tape: &mut [u8], step_limit: usize) -> usize;
+
+    /// Returns true if the byte is a meaningful instruction in this substrate
+    /// (as opposed to a no-op). Used for visualization.
+    fn is_instruction(byte: u8) -> bool;
 }

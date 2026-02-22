@@ -90,7 +90,7 @@ impl SurfaceMesh {
     /// Compute geodesic neighbor table. `radius` of `None` uses 2x average
     /// centroid-to-centroid distance across adjacent faces.
     pub fn compute_neighbors(&mut self, radius: Option<f32>) {
-        let radius = radius.unwrap_or_else(|| 2.0 * self.avg_adjacent_centroid_distance());
+        let radius = radius.unwrap_or_else(|| 4.0 * self.avg_adjacent_centroid_distance());
         let n = self.faces.len();
         eprintln!("Computing geodesic neighbors for {n} faces (radius: {radius:.4})...");
 

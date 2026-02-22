@@ -222,6 +222,12 @@ impl Substrate for Forth {
 
         steps
     }
+
+    fn is_instruction(byte: u8) -> bool {
+        // 0x00-0x0D: valid opcodes, 0x0E-0x3F: no-ops,
+        // 0x40-0x7F: push immediate, 0x80-0xFF: relative jump.
+        byte <= 0x0D || byte >= 0x40
+    }
 }
 
 #[cfg(test)]
