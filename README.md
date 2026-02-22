@@ -1,9 +1,15 @@
 # Computational Life
 
-A primordial soup simulator where populations of self-modifying programs
-interact, mutate, and evolve emergent structure — inspired by
-[artificial chemistry](https://en.wikipedia.org/wiki/Artificial_chemistry)
-and open-ended evolution research.
+This is an independent reproduction of the paper
+[**Computational Life: How Well-formed, Self-replicating Programs Emerge from Simple Interaction**](https://arxiv.org/abs/2406.19108)
+by Blaise Ag​üera y Arcas, Jyrki Alakuijala, James Evans, Ben Laurie,
+Alexander Mordvintsev, Eyvind Niklasson, Ettore Randazzo, and Luca Versari
+(Google, Paradigms of Intelligence Team & The University of Chicago).
+
+All credit for the ideas, experimental design, and instruction sets goes to the
+original authors. This project exists purely as an exercise in scientific
+curiosity — we found their work fascinating and wanted to watch self-replicators
+emerge with our own eyes.
 
 <p align="center">
   <img src="images/surface-sphere.png" width="720" alt="Programs evolving on an icosphere surface" />
@@ -88,6 +94,14 @@ cargo run --release -- --seed 1 --epochs 1000 --benchmark
 When replicators arise, they copy themselves into neighbors, collapsing
 entropy and driving up the count of identical programs. Different instruction
 sets and topologies produce qualitatively different evolutionary dynamics.
+
+## References
+
+> Blaise Ag​üera y Arcas, Jyrki Alakuijala, James Evans, Ben Laurie,
+> Alexander Mordvintsev, Eyvind Niklasson, Ettore Randazzo, Luca Versari.
+> *Computational Life: How Well-formed, Self-replicating Programs Emerge
+> from Simple Interaction.* arXiv:2406.19108, 2024.
+> https://arxiv.org/abs/2406.19108
 
 ## License
 
