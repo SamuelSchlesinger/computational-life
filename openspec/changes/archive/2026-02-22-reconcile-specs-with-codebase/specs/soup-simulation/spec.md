@@ -1,8 +1,5 @@
-# soup-simulation Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-core-engine-and-bff. Update Purpose after archive.
-## Requirements
 ### Requirement: Population Initialization
 
 The system SHALL initialize a population of programs on a surface mesh, with one program per mesh face. Each program SHALL consist of `P` bytes filled with uniformly random bytes from a seeded random number generator. The default program size SHALL be P=64. Population size is determined by the mesh face count. Initializing with the same seed and mesh SHALL produce the identical population.
@@ -48,3 +45,8 @@ Mutation SHALL use geometric distribution sampling to skip directly to the next 
 - **WHEN** mutation rate is set to 0
 - **THEN** no bytes SHALL be mutated between epochs
 
+## REMOVED Requirements
+
+### Requirement: Epoch Metrics Output
+**Reason**: The application no longer outputs CSV to stdout. Metrics are computed and sent to the visualization thread via channels. Metrics display is now covered by the live-visualization spec.
+**Migration**: Metrics are accessible through the GUI sidebar plots.

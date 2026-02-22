@@ -1,8 +1,5 @@
-# simulation-cli Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-core-engine-and-bff. Update Purpose after archive.
-## Requirements
 ### Requirement: CLI Configuration
 
 The system SHALL provide a graphical menu interface that allows the user to configure simulation parameters before starting. The menu SHALL accept the following settings:
@@ -36,4 +33,3 @@ The system SHALL display simulation progress in the sidebar during active simula
 - **WHEN** a simulation is running
 - **THEN** the sidebar SHALL show the current epoch number
 - **AND** metrics plots SHALL update at the configured metrics interval
-

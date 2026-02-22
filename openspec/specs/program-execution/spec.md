@@ -5,7 +5,11 @@ TBD - created by archiving change add-core-engine-and-bff. Update Purpose after 
 ## Requirements
 ### Requirement: Substrate Trait
 
-The system SHALL define a `Substrate` trait that encapsulates instruction set execution semantics. The trait SHALL expose a single static method `execute(tape: &mut [u8], step_limit: usize) -> usize` that runs the program encoded in `tape` for at most `step_limit` steps and returns the number of steps actually executed. The tape SHALL be modified in-place during execution.
+The system SHALL define a `Substrate` trait that encapsulates instruction set execution semantics. The trait SHALL expose three static methods:
+
+1. `execute(tape: &mut [u8], step_limit: usize) -> usize` — Run the program encoded in `tape` for at most `step_limit` steps and return the number of steps actually executed. The tape SHALL be modified in-place during execution.
+2. `is_instruction(byte: u8) -> bool` — Return true if the byte is a meaningful instruction in this substrate (non-instructions are no-ops). Used for visualization (instruction density color mode).
+3. `disassemble(tape: &[u8]) -> String` — Return a human-readable disassembly of the tape contents showing hex addresses, hex bytes, mnemonics, and descriptions. Used by the program viewer.
 
 #### Scenario: Substrate executes within step limit
 - **WHEN** a substrate's `execute` method is called with a tape and step_limit of 1000
@@ -16,6 +20,15 @@ The system SHALL define a `Substrate` trait that encapsulates instruction set ex
 - **WHEN** a substrate's `execute` method is called with a tape of all zeros
 - **THEN** it SHALL terminate without panicking
 - **AND** return the number of steps consumed (which may be 0)
+
+#### Scenario: Instruction classification
+- **WHEN** `is_instruction` is called for a BFF instruction byte (e.g., 0x2E for '.')
+- **THEN** it SHALL return true
+- **AND** for a non-instruction byte, it SHALL return false
+
+#### Scenario: Disassembly output
+- **WHEN** `disassemble` is called with a tape
+- **THEN** it SHALL return a multi-line string with one line per instruction or data byte
 
 ### Requirement: Program Concatenation
 
