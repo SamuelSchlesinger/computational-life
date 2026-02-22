@@ -1,0 +1,18 @@
+[package]
+name = "complife"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+viz = ["dep:bevy", "dep:bevy_egui", "dep:egui_plot"]
+
+[dependencies]
+rand = "0.8"
+brotli = "7"
+clap = { version = "4", features = ["derive"] }
+bevy = { version = "0.15", optional = true, default-features = false, features = ["bevy_winit", "bevy_render", "bevy_core_pipeline", "bevy_picking", "x11"] }
+bevy_egui = { version = "0.33", optional = true }
+egui_plot = { version = "0.31", optional = true }
+
+[dev-dependencies]
+proptest = "1"
