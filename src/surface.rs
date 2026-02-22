@@ -378,6 +378,224 @@ impl SurfaceMesh {
         eprintln!("Loaded OBJ: {} vertices, {} faces", vertices.len(), faces.len());
         Self::from_geometry(vertices, faces)
     }
+
+    /// Generate a "hamster tunnel": a loop of spheres connected by tubes.
+    ///
+    /// Sphere positions are scattered randomly in 3D, sorted into a short
+    /// path via nearest-neighbor heuristic, and connected as a closed loop.
+    /// This creates torus-like topology where information can flow in cycles.
+    ///
+    /// - `num_spheres`: number of sphere nodes (>= 3 for a loop).
+    /// - `segments`: vertices per ring cross-section (>= 3).
+    /// - `seed`: RNG seed for sphere placement.
+    pub fn hamster_tunnel(num_spheres: usize, segments: usize, seed: u64) -> Result<Self, String> {
+        if num_spheres < 3 {
+            return Err("Hamster tunnel requires at least 3 spheres".into());
+        }
+        if segments < 3 {
+            return Err("Hamster tunnel requires at least 3 circumferential segments".into());
+        }
+
+        const SPHERE_RADIUS: f32 = 0.4;
+        const TUBE_RADIUS: f32 = 0.12;
+        const RINGS_PER_SEGMENT: usize = 16;
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+
+        // ── Phase A: scatter sphere centers in a bounded volume ──
+        // Radius scales so average nearest-neighbor distance ≈ 2.0.
+        let spread = 2.0 * (3.0 * num_spheres as f32 / (4.0 * std::f32::consts::PI)).cbrt();
+        let mut raw_centers: Vec<[f32; 3]> = Vec::with_capacity(num_spheres);
+        for _ in 0..num_spheres {
+            loop {
+                let x = rng.r#gen::<f32>() * 2.0 - 1.0;
+                let y = rng.r#gen::<f32>() * 2.0 - 1.0;
+                let z = rng.r#gen::<f32>() * 2.0 - 1.0;
+                if x * x + y * y + z * z <= 1.0 {
+                    raw_centers.push([x * spread, y * spread, z * spread]);
+                    break;
+                }
+            }
+        }
+
+        // ── Phase A2: nearest-neighbor sort for a short path ──
+        let mut centers: Vec<[f32; 3]> = Vec::with_capacity(num_spheres);
+        let mut used = vec![false; num_spheres];
+        let mut current = 0;
+        used[0] = true;
+        centers.push(raw_centers[0]);
+        for _ in 1..num_spheres {
+            let mut best = usize::MAX;
+            let mut best_dist = f32::INFINITY;
+            for (j, &u) in used.iter().enumerate() {
+                if u { continue; }
+                let d = centroid_distance(&raw_centers[current], &raw_centers[j]);
+                if d < best_dist {
+                    best_dist = d;
+                    best = j;
+                }
+            }
+            used[best] = true;
+            centers.push(raw_centers[best]);
+            current = best;
+        }
+
+        // ── Phase B: build ring sample points along the closed loop ──
+        // The loop goes: center[0]→center[1]→…→center[N-1]→center[0].
+        let num_segments = num_spheres; // N segments for a loop of N spheres
+        let total_rings = num_segments * RINGS_PER_SEGMENT; // no +1: loop wraps
+
+        let mut ring_positions: Vec<[f32; 3]> = Vec::with_capacity(total_rings);
+        let mut ring_radii: Vec<f32> = Vec::with_capacity(total_rings);
+        let mut ring_tangents: Vec<[f32; 3]> = Vec::with_capacity(total_rings);
+
+        for seg in 0..num_segments {
+            let c0 = centers[seg];
+            let c1 = centers[(seg + 1) % num_spheres];
+            let tangent = normalize3([c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2]]);
+
+            for r in 0..RINGS_PER_SEGMENT {
+                let u = r as f32 / RINGS_PER_SEGMENT as f32;
+                let pos = [
+                    c0[0] + (c1[0] - c0[0]) * u,
+                    c0[1] + (c1[1] - c0[1]) * u,
+                    c0[2] + (c1[2] - c0[2]) * u,
+                ];
+                let cos_val = (std::f32::consts::PI * u).cos();
+                let radius = TUBE_RADIUS + (SPHERE_RADIUS - TUBE_RADIUS) * cos_val * cos_val;
+
+                ring_positions.push(pos);
+                ring_radii.push(radius);
+                ring_tangents.push(tangent);
+            }
+        }
+
+        // ── Phase C: measure holonomy twist via parallel transport ──
+        let t0 = ring_tangents[0];
+        let up_candidate = if t0[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+        let initial_normal = normalize3(cross3(t0, up_candidate));
+        let initial_binormal = cross3(t0, initial_normal);
+
+        // Pass 1: transport frame around full loop to measure accumulated twist.
+        let mut normal = initial_normal;
+        for ring_idx in 1..total_rings {
+            let prev_t = ring_tangents[ring_idx - 1];
+            let tangent = ring_tangents[ring_idx];
+            let d = dot3(prev_t, tangent);
+            if d < 0.9999 {
+                let axis = normalize3(cross3(prev_t, tangent));
+                let angle = d.clamp(-1.0, 1.0).acos();
+                normal = normalize3(rotate_around_axis(normal, axis, angle));
+            }
+        }
+        // Transport across the closure edge (last ring -> ring 0).
+        {
+            let prev_t = ring_tangents[total_rings - 1];
+            let tangent = ring_tangents[0];
+            let d = dot3(prev_t, tangent);
+            if d < 0.9999 {
+                let axis = normalize3(cross3(prev_t, tangent));
+                let angle = d.clamp(-1.0, 1.0).acos();
+                normal = normalize3(rotate_around_axis(normal, axis, angle));
+            }
+        }
+        let cos_twist = dot3(normal, initial_normal);
+        let sin_twist = dot3(normal, initial_binormal);
+        let total_twist = sin_twist.atan2(cos_twist);
+
+        // ── Phase D: generate ring vertices with holonomy correction ──
+        let mut normal = initial_normal;
+        let mut vertices: Vec<[f32; 3]> = Vec::with_capacity(total_rings * segments);
+
+        for ring_idx in 0..total_rings {
+            let pos = ring_positions[ring_idx];
+            let r = ring_radii[ring_idx];
+            let tangent = ring_tangents[ring_idx];
+
+            if ring_idx > 0 {
+                let prev_t = ring_tangents[ring_idx - 1];
+                let d = dot3(prev_t, tangent);
+                if d < 0.9999 {
+                    let axis = normalize3(cross3(prev_t, tangent));
+                    let angle = d.clamp(-1.0, 1.0).acos();
+                    normal = normalize3(rotate_around_axis(normal, axis, angle));
+                }
+            }
+
+            // Counter-twist: rotate frame around tangent to distribute correction.
+            let correction = -total_twist * (ring_idx as f32 / total_rings as f32);
+            let cn = normalize3(rotate_around_axis(normal, tangent, correction));
+            let cb = cross3(tangent, cn);
+
+            for j in 0..segments {
+                let theta = 2.0 * std::f32::consts::PI * j as f32 / segments as f32;
+                let c = theta.cos();
+                let s = theta.sin();
+                vertices.push([
+                    pos[0] + r * (c * cn[0] + s * cb[0]),
+                    pos[1] + r * (c * cn[1] + s * cb[1]),
+                    pos[2] + r * (c * cn[2] + s * cb[2]),
+                ]);
+            }
+        }
+
+        // ── Phase E: connect adjacent rings with triangle strips (loop) ──
+        let body_faces = 2 * segments * total_rings;
+        let mut faces: Vec<[usize; 3]> = Vec::with_capacity(body_faces);
+
+        for k in 0..total_rings {
+            let base0 = k * segments;
+            let base1 = ((k + 1) % total_rings) * segments; // wraps around
+            for j in 0..segments {
+                let j_next = (j + 1) % segments;
+                faces.push([base0 + j, base1 + j, base1 + j_next]);
+                faces.push([base0 + j, base1 + j_next, base0 + j_next]);
+            }
+        }
+
+        // No caps needed — the loop closes on itself.
+
+        let face_count = faces.len();
+        eprintln!(
+            "Surface: hamster tunnel ({num_spheres} spheres, {segments} segments, {face_count} faces)"
+        );
+        Self::from_geometry(vertices, faces)
+    }
+}
+
+// ─── Surface spec ───────────────────────────────────────────────────────────
+
+/// Specification for generating a surface mesh.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SurfaceSpec {
+    Sphere { subdivisions: usize },
+    Torus { major: usize, minor: usize },
+    FlatGrid { width: usize, height: usize },
+    HamsterTunnel { num_spheres: usize, segments: usize, seed: u64 },
+}
+
+impl SurfaceSpec {
+    /// Build a SurfaceMesh from this spec (does NOT compute neighbors).
+    pub fn build(&self) -> Result<SurfaceMesh, String> {
+        match self {
+            SurfaceSpec::Sphere { subdivisions } => SurfaceMesh::icosphere(*subdivisions),
+            SurfaceSpec::Torus { major, minor } => SurfaceMesh::torus(*major, *minor),
+            SurfaceSpec::FlatGrid { width, height } => SurfaceMesh::flat_grid(*width, *height),
+            SurfaceSpec::HamsterTunnel { num_spheres, segments, seed } => {
+                SurfaceMesh::hamster_tunnel(*num_spheres, *segments, *seed)
+            }
+        }
+    }
+
+    /// Human-readable label.
+    pub fn label(&self) -> &'static str {
+        match self {
+            SurfaceSpec::Sphere { .. } => "Sphere",
+            SurfaceSpec::Torus { .. } => "Torus",
+            SurfaceSpec::FlatGrid { .. } => "Flat Grid",
+            SurfaceSpec::HamsterTunnel { .. } => "Hamster Tunnel",
+        }
+    }
 }
 
 // ─── Geometry helpers ────────────────────────────────────────────────────────
@@ -480,6 +698,40 @@ pub fn face_normal(v0: &[f32; 3], v1: &[f32; 3], v2: &[f32; 3]) -> [f32; 3] {
     }
 }
 
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len < 1e-10 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [v[0] / len, v[1] / len, v[2] / len]
+    }
+}
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// Rotate vector `v` around unit `axis` by `angle` radians (Rodrigues' formula).
+fn rotate_around_axis(v: [f32; 3], axis: [f32; 3], angle: f32) -> [f32; 3] {
+    let c = angle.cos();
+    let s = angle.sin();
+    let d = dot3(axis, v);
+    let cr = cross3(axis, v);
+    [
+        v[0] * c + cr[0] * s + axis[0] * d * (1.0 - c),
+        v[1] * c + cr[1] * s + axis[1] * d * (1.0 - c),
+        v[2] * c + cr[2] * s + axis[2] * d * (1.0 - c),
+    ]
+}
+
 /// Sample from geometric distribution via CDF inversion.
 /// Returns the number of bytes to skip before the next mutation.
 /// `inv_log` should be `1.0 / ln(1 - mutation_rate)` (precomputed).
@@ -494,6 +746,7 @@ fn geometric_skip(rng: &mut SmallRng, inv_log: f64) -> usize {
 // ─── SoupSurface ─────────────────────────────────────────────────────────────
 
 /// Configuration for a surface simulation.
+#[derive(Clone, Copy)]
 pub struct SoupSurfaceConfig {
     /// Bytes per program.
     pub program_size: usize,
@@ -853,5 +1106,46 @@ f 4 1 5 8
         soup.population_bytes_into(&mut buf);
         let final_hoe = high_order_entropy(&buf);
         assert!(final_hoe > 0.0, "Final HOE should be positive");
+    }
+
+    #[test]
+    fn test_hamster_tunnel_basic() {
+        let mesh = SurfaceMesh::hamster_tunnel(5, 16, 42).unwrap();
+        // 5 spheres => 5 segments (loop) => 5 * 16 = 80 rings
+        // Body faces: 2 * 16 * 80 = 2560 (loop wraps, no caps)
+        assert_eq!(mesh.faces.len(), 2560);
+    }
+
+    #[test]
+    fn test_hamster_tunnel_min_params() {
+        let mesh = SurfaceMesh::hamster_tunnel(3, 3, 0).unwrap();
+        assert!(mesh.faces.len() > 0);
+    }
+
+    #[test]
+    fn test_hamster_tunnel_invalid_params() {
+        assert!(SurfaceMesh::hamster_tunnel(2, 16, 0).is_err()); // need >= 3 for loop
+        assert!(SurfaceMesh::hamster_tunnel(5, 2, 0).is_err());
+    }
+
+    #[test]
+    fn test_hamster_tunnel_adjacency_symmetric() {
+        let mesh = SurfaceMesh::hamster_tunnel(4, 8, 42).unwrap();
+        for (i, adj) in mesh.face_adjacency.iter().enumerate() {
+            for &j in adj {
+                assert!(
+                    mesh.face_adjacency[j].contains(&i),
+                    "Face {i} adjacent to {j}, but not vice versa"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_hamster_tunnel_deterministic() {
+        let m1 = SurfaceMesh::hamster_tunnel(6, 12, 42).unwrap();
+        let m2 = SurfaceMesh::hamster_tunnel(6, 12, 42).unwrap();
+        assert_eq!(m1.vertices, m2.vertices);
+        assert_eq!(m1.faces, m2.faces);
     }
 }

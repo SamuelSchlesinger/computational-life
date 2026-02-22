@@ -5,7 +5,7 @@ use complife::subleq::{Subleq, Rsubleq4};
 use complife::metrics::high_order_entropy;
 use complife::soup::{Soup, SoupConfig};
 use complife::substrate::Substrate;
-use complife::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh};
+use complife::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh, SurfaceSpec};
 
 #[derive(Parser)]
 #[command(name = "complife", about = "Computational Life: primordial soup simulation")]
@@ -46,7 +46,7 @@ struct Cli {
     #[arg(long)]
     benchmark: bool,
 
-    /// Run simulation on a surface (flat:WxH, sphere:N, torus:MxN, obj:PATH).
+    /// Run simulation on a surface (flat:WxH, sphere:N, torus:MxN, tunnel:N, obj:PATH).
     #[arg(long)]
     surface: Option<String>,
 
@@ -79,35 +79,76 @@ fn parse_dimensions(s: &str) -> Result<(usize, usize), String> {
     Ok((w, h))
 }
 
-/// Parse a --surface spec into a SurfaceMesh.
-fn parse_surface(spec: &str, neighbor_radius: Option<f32>) -> Result<SurfaceMesh, String> {
-    let mut mesh = if let Some(rest) = spec.strip_prefix("flat:") {
+/// Parse a --surface spec into a SurfaceSpec (for surface types with GUI support).
+/// OBJ files bypass SurfaceSpec and go directly to SurfaceMesh.
+fn parse_surface_spec(spec: &str, seed: u64) -> Result<SurfaceSpec, String> {
+    if let Some(rest) = spec.strip_prefix("flat:") {
         let (w, h) = parse_dimensions(rest)?;
-        eprintln!("Surface: flat grid {w}x{h} ({} faces)", 2 * w * h);
-        SurfaceMesh::flat_grid(w, h)?
+        Ok(SurfaceSpec::FlatGrid { width: w, height: h })
     } else if let Some(rest) = spec.strip_prefix("sphere:") {
         let sub = rest.parse::<usize>().map_err(|e| format!("Invalid subdivision level: {e}"))?;
-        let face_count = 20 * 4usize.pow(sub as u32);
-        eprintln!("Surface: icosphere subdivision {sub} ({face_count} faces)");
-        SurfaceMesh::icosphere(sub)?
+        Ok(SurfaceSpec::Sphere { subdivisions: sub })
     } else if let Some(rest) = spec.strip_prefix("torus:") {
         let (m, n) = parse_dimensions(rest)?;
-        eprintln!("Surface: torus {m}x{n} ({} faces)", 2 * m * n);
-        SurfaceMesh::torus(m, n)?
-    } else if let Some(rest) = spec.strip_prefix("obj:") {
-        SurfaceMesh::from_obj(rest)?
+        Ok(SurfaceSpec::Torus { major: m, minor: n })
+    } else if let Some(rest) = spec.strip_prefix("tunnel:") {
+        let n = rest.parse::<usize>().map_err(|e| format!("Invalid tunnel sphere count: {e}"))?;
+        Ok(SurfaceSpec::HamsterTunnel { num_spheres: n, segments: 24, seed })
     } else {
-        return Err(format!(
-            "Unknown surface type: '{spec}'. Expected flat:WxH, sphere:N, torus:MxN, or obj:PATH"
-        ));
-    };
+        Err(format!(
+            "Unknown surface type: '{spec}'. Expected flat:WxH, sphere:N, torus:MxN, tunnel:N, or obj:PATH"
+        ))
+    }
+}
 
+/// Parse a --surface spec into a SurfaceMesh.
+fn parse_surface(spec: &str, neighbor_radius: Option<f32>, seed: u64) -> Result<SurfaceMesh, String> {
+    // OBJ files bypass SurfaceSpec.
+    if let Some(rest) = spec.strip_prefix("obj:") {
+        let mut mesh = SurfaceMesh::from_obj(rest)?;
+        mesh.compute_neighbors(neighbor_radius);
+        return Ok(mesh);
+    }
+    let surface_spec = parse_surface_spec(spec, seed)?;
+    let mut mesh = surface_spec.build()?;
     mesh.compute_neighbors(neighbor_radius);
     Ok(mesh)
 }
 
 fn main() {
     let cli = Cli::parse();
+
+    #[cfg(feature = "viz")]
+    if cli.live {
+        let substrate = match cli.substrate.as_str() {
+            "bff" => complife::viz::SubstrateKind::Bff,
+            "forth" => complife::viz::SubstrateKind::Forth,
+            "subleq" => complife::viz::SubstrateKind::Subleq,
+            "rsubleq4" => complife::viz::SubstrateKind::Rsubleq4,
+            other => {
+                eprintln!("Unknown substrate: {other}. Available: bff, forth, subleq, rsubleq4");
+                std::process::exit(1);
+            }
+        };
+        let initial_spec = cli.surface.as_ref()
+            .and_then(|s| parse_surface_spec(s, cli.seed).ok())
+            .unwrap_or(SurfaceSpec::Sphere { subdivisions: 4 });
+
+        let menu_config = complife::viz::MenuConfig::new(
+            substrate,
+            &initial_spec,
+            cli.seed,
+            cli.neighbor_radius,
+            cli.program_size,
+            cli.step_limit,
+            cli.mutation_rate,
+            cli.epochs,
+            cli.metrics_interval,
+            cli.blur,
+        );
+        complife::viz::run_app(menu_config);
+        return;
+    }
 
     match cli.substrate.as_str() {
         "bff" => dispatch::<Bff>(&cli),
@@ -122,8 +163,8 @@ fn main() {
 }
 
 fn dispatch<S: Substrate + Send + Sync + 'static>(cli: &Cli) {
-    if let Some(ref surface_spec) = cli.surface {
-        let mesh = match parse_surface(surface_spec, cli.neighbor_radius) {
+    if let Some(ref surface_spec_str) = cli.surface {
+        let mesh = match parse_surface(surface_spec_str, cli.neighbor_radius, cli.seed) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("{e}");
@@ -135,19 +176,6 @@ fn dispatch<S: Substrate + Send + Sync + 'static>(cli: &Cli) {
             step_limit: cli.step_limit,
             mutation_rate: cli.mutation_rate,
         };
-
-        #[cfg(feature = "viz")]
-        if cli.live {
-            complife::viz::run_viz_surface::<S>(
-                mesh,
-                config,
-                cli.seed,
-                cli.epochs,
-                cli.metrics_interval,
-                cli.blur,
-            );
-            return;
-        }
 
         if cli.benchmark {
             run_benchmark_surface::<S>(mesh, config, cli.seed, cli.epochs);
@@ -161,12 +189,6 @@ fn dispatch<S: Substrate + Send + Sync + 'static>(cli: &Cli) {
             step_limit: cli.step_limit,
             mutation_rate: cli.mutation_rate,
         };
-
-        #[cfg(feature = "viz")]
-        if cli.live {
-            complife::viz::run_viz::<S>(config, cli.seed, cli.epochs, cli.metrics_interval);
-            return;
-        }
 
         if cli.benchmark {
             run_benchmark::<S>(config, cli.seed, cli.epochs);
