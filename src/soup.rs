@@ -1,6 +1,6 @@
 use rand::Rng;
 use rand::SeedableRng;
-use rand::rngs::StdRng;
+use rand::rngs::SmallRng;
 
 use crate::substrate::Substrate;
 
@@ -32,13 +32,13 @@ pub struct Soup {
     /// The population: a flat vector of programs, each `program_size` bytes.
     pub programs: Vec<Vec<u8>>,
     pub config: SoupConfig,
-    pub rng: StdRng,
+    pub rng: SmallRng,
 }
 
 impl Soup {
     /// Create a new soup with randomly initialized programs.
     pub fn new(config: SoupConfig, seed: u64) -> Self {
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = SmallRng::seed_from_u64(seed);
         let programs = (0..config.population_size)
             .map(|_| {
                 let mut prog = vec![0u8; config.program_size];
@@ -113,13 +113,20 @@ impl Soup {
         }
     }
 
-    /// Get the entire population as a flat byte slice (for HOE computation).
-    pub fn population_bytes(&self) -> Vec<u8> {
+    /// Fill `buf` with the entire population as a flat byte slice.
+    pub fn population_bytes_into(&self, buf: &mut Vec<u8>) {
+        buf.clear();
         let total = self.config.population_size * self.config.program_size;
-        let mut buf = Vec::with_capacity(total);
+        buf.reserve(total);
         for prog in &self.programs {
             buf.extend_from_slice(prog);
         }
+    }
+
+    /// Get the entire population as a flat byte slice (convenience wrapper).
+    pub fn population_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        self.population_bytes_into(&mut buf);
         buf
     }
 }

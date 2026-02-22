@@ -1546,6 +1546,7 @@ dependencies = [
  "egui_plot",
  "proptest",
  "rand 0.8.5",
+ "rayon",
 ]
 
 [[package]]

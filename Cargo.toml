@@ -7,7 +7,8 @@ edition = "2024"
 viz = ["dep:bevy", "dep:bevy_egui", "dep:egui_plot"]
 
 [dependencies]
-rand = "0.8"
+rand = { version = "0.8", features = ["small_rng"] }
+rayon = "1"
 brotli = "7"
 clap = { version = "4", features = ["derive"] }
 bevy = { version = "0.15", optional = true, default-features = false, features = ["bevy_winit", "bevy_render", "bevy_core_pipeline", "bevy_picking", "x11"] }

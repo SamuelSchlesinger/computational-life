@@ -38,7 +38,7 @@ struct Cli {
     substrate: String,
 
     /// Compute and output metrics every N epochs.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 25)]
     metrics_interval: usize,
 
     /// Run in benchmark mode: suppress CSV, print throughput stats.
@@ -53,6 +53,11 @@ struct Cli {
     #[cfg(feature = "viz")]
     #[arg(long)]
     live: bool,
+
+    /// Spatial blur strength for 2D live viewer (0.0 = off, 1.0 = max).
+    #[cfg(feature = "viz")]
+    #[arg(long, default_value_t = 0.0)]
+    blur: f32,
 }
 
 /// Parse a "WxH" grid specification string.
@@ -83,7 +88,7 @@ fn main() {
     }
 }
 
-fn dispatch<S: Substrate + Send + 'static>(cli: &Cli) {
+fn dispatch<S: Substrate + Send + Sync + 'static>(cli: &Cli) {
     if let Some(ref grid_str) = cli.grid {
         let (w, h) = match parse_grid(grid_str) {
             Ok(dims) => dims,
@@ -102,7 +107,7 @@ fn dispatch<S: Substrate + Send + 'static>(cli: &Cli) {
 
         #[cfg(feature = "viz")]
         if cli.live {
-            complife::viz::run_viz_2d::<S>(config, cli.seed, cli.epochs, cli.metrics_interval);
+            complife::viz::run_viz_2d::<S>(config, cli.seed, cli.epochs, cli.metrics_interval, cli.blur);
             return;
         }
 
@@ -140,9 +145,11 @@ fn run_simulation<S: Substrate>(
     metrics_interval: usize,
 ) {
     let mut soup = Soup::new(config, seed);
+    let mut pop_buf = Vec::new();
 
     println!("epoch,hoe");
-    let hoe = high_order_entropy(&soup.population_bytes());
+    soup.population_bytes_into(&mut pop_buf);
+    let hoe = high_order_entropy(&pop_buf);
     println!("0,{hoe:.6}");
 
     for epoch in 1..=epochs {
@@ -150,7 +157,8 @@ fn run_simulation<S: Substrate>(
         soup.mutate();
 
         if epoch % metrics_interval == 0 {
-            let hoe = high_order_entropy(&soup.population_bytes());
+            soup.population_bytes_into(&mut pop_buf);
+            let hoe = high_order_entropy(&pop_buf);
             println!("{epoch},{hoe:.6}");
         }
 
@@ -189,7 +197,7 @@ fn run_benchmark<S: Substrate>(
     eprintln!("  Interactions/sec:  {interactions_per_sec:.0}");
 }
 
-fn run_simulation_2d<S: Substrate>(
+fn run_simulation_2d<S: Substrate + Sync>(
     config: Soup2dConfig,
     seed: u64,
     epochs: usize,
@@ -198,10 +206,12 @@ fn run_simulation_2d<S: Substrate>(
     let w = config.width;
     let h = config.height;
     let mut soup = Soup2d::new(config, seed);
+    let mut pop_buf = Vec::new();
 
     eprintln!("2D simulation: {w}x{h} grid ({} programs)", w * h);
     println!("epoch,hoe");
-    let hoe = high_order_entropy(&soup.population_bytes());
+    soup.population_bytes_into(&mut pop_buf);
+    let hoe = high_order_entropy(&pop_buf);
     println!("0,{hoe:.6}");
 
     for epoch in 1..=epochs {
@@ -209,7 +219,8 @@ fn run_simulation_2d<S: Substrate>(
         soup.mutate();
 
         if epoch % metrics_interval == 0 {
-            let hoe = high_order_entropy(&soup.population_bytes());
+            soup.population_bytes_into(&mut pop_buf);
+            let hoe = high_order_entropy(&pop_buf);
             println!("{epoch},{hoe:.6}");
         }
 
@@ -220,12 +231,14 @@ fn run_simulation_2d<S: Substrate>(
     eprintln!();
 }
 
-fn run_benchmark_2d<S: Substrate>(
+fn run_benchmark_2d<S: Substrate + Sync>(
     config: Soup2dConfig,
     seed: u64,
     epochs: usize,
 ) {
-    let pop_size = config.width * config.height;
+    let w = config.width;
+    let h = config.height;
+    let pop_size = w * h;
     let mut soup = Soup2d::new(config, seed);
 
     let start = std::time::Instant::now();
@@ -239,7 +252,7 @@ fn run_benchmark_2d<S: Substrate>(
 
     eprintln!("Benchmark results (2D):");
     eprintln!("  Epochs:            {epochs}");
-    eprintln!("  Grid:              {}x{}", pop_size, pop_size); // will fix below
+    eprintln!("  Grid:              {w}x{h}");
     eprintln!("  Population size:   {pop_size}");
     eprintln!("  Elapsed:           {elapsed:.2?}");
     eprintln!("  Epochs/sec:        {epochs_per_sec:.1}");
