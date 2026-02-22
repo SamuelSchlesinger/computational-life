@@ -4,6 +4,17 @@ use rand::rngs::SmallRng;
 
 use crate::substrate::Substrate;
 
+/// Sample from geometric distribution via CDF inversion.
+/// Returns the number of bytes to skip before the next mutation.
+/// `inv_log` should be `1.0 / ln(1 - mutation_rate)` (precomputed).
+fn geometric_skip(rng: &mut SmallRng, inv_log: f64) -> usize {
+    let u: f64 = rng.r#gen::<f64>();
+    if u < 1e-300 {
+        return usize::MAX;
+    }
+    (u.ln() * inv_log) as usize
+}
+
 /// Configuration for a primordial soup simulation.
 pub struct SoupConfig {
     /// Number of programs in the population.
@@ -97,19 +108,25 @@ impl Soup {
         }
     }
 
-    /// Apply background mutation: flip each byte with the configured probability.
+    /// Apply background mutation: flip random bits with the configured probability.
+    ///
+    /// Uses geometric distribution to skip directly to the next mutation site,
+    /// reducing RNG calls from O(total_bytes) to O(total_bytes * mutation_rate).
     pub fn mutate(&mut self) {
         if self.config.mutation_rate <= 0.0 {
             return;
         }
-        for prog in &mut self.programs {
-            for byte in prog.iter_mut() {
-                if self.rng.gen_bool(self.config.mutation_rate) {
-                    // Flip a random bit.
-                    let bit = 1u8 << self.rng.gen_range(0..8);
-                    *byte ^= bit;
-                }
-            }
+        let total_bytes = self.programs.len() * self.config.program_size;
+        let ps = self.config.program_size;
+        let inv_log = 1.0 / (1.0 - self.config.mutation_rate).ln();
+
+        let mut pos = geometric_skip(&mut self.rng, inv_log);
+        while pos < total_bytes {
+            let prog_idx = pos / ps;
+            let byte_idx = pos % ps;
+            let bit = 1u8 << self.rng.gen_range(0..8);
+            self.programs[prog_idx][byte_idx] ^= bit;
+            pos = pos.saturating_add(1).saturating_add(geometric_skip(&mut self.rng, inv_log));
         }
     }
 

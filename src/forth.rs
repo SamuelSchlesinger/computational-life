@@ -16,14 +16,63 @@ pub struct Forth;
 /// Maximum stack depth to prevent unbounded growth.
 const MAX_STACK: usize = 256;
 
-/// Pop from stack, returning 0 if empty.
-fn pop_or_zero(stack: &mut Vec<u8>) -> u8 {
-    stack.pop().unwrap_or(0)
+/// Fixed-size stack that avoids heap allocation. Stack underflow returns 0.
+struct FixedStack {
+    data: [u8; MAX_STACK],
+    len: usize,
 }
 
-/// Peek at top of stack, returning 0 if empty.
-fn top_or_zero(stack: &[u8]) -> u8 {
-    stack.last().copied().unwrap_or(0)
+impl FixedStack {
+    #[inline(always)]
+    fn new() -> Self {
+        Self {
+            data: [0u8; MAX_STACK],
+            len: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, val: u8) {
+        if self.len < MAX_STACK {
+            self.data[self.len] = val;
+            self.len += 1;
+        }
+    }
+
+    #[inline(always)]
+    fn pop(&mut self) -> u8 {
+        if self.len > 0 {
+            self.len -= 1;
+            self.data[self.len]
+        } else {
+            0
+        }
+    }
+
+    #[inline(always)]
+    fn top(&self) -> u8 {
+        if self.len > 0 {
+            self.data[self.len - 1]
+        } else {
+            0
+        }
+    }
+
+    #[inline(always)]
+    fn top_mut(&mut self) -> Option<&mut u8> {
+        if self.len > 0 {
+            Some(&mut self.data[self.len - 1])
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn swap_top_two(&mut self) {
+        if self.len >= 2 {
+            self.data.swap(self.len - 1, self.len - 2);
+        }
+    }
 }
 
 impl Substrate for Forth {
@@ -33,7 +82,7 @@ impl Substrate for Forth {
             return 0;
         }
 
-        let mut stack: Vec<u8> = Vec::with_capacity(32);
+        let mut stack = FixedStack::new();
         let mut pc: usize = 0;
         let mut steps: usize = 0;
 
@@ -47,117 +96,95 @@ impl Substrate for Forth {
                     match instr & 0x0F {
                         0x00 if instr < 0x10 => {
                             // READ: <top> = *<top>
-                            let top = pop_or_zero(&mut stack);
+                            let top = stack.pop();
                             let addr = top as usize % len;
                             let val = tape[addr];
-                            if stack.len() < MAX_STACK {
-                                stack.push(val);
-                            }
+                            stack.push(val);
                         }
                         0x01 if instr < 0x10 => {
                             // READ64: <top> = *(<top> + 64)
-                            let top = pop_or_zero(&mut stack);
+                            let top = stack.pop();
                             let addr = ((top as usize).wrapping_add(64)) % len;
                             let val = tape[addr];
-                            if stack.len() < MAX_STACK {
-                                stack.push(val);
-                            }
+                            stack.push(val);
                         }
                         0x02 if instr < 0x10 => {
                             // WRITE: *<top> = <top-1>; pop; pop
-                            let addr_val = pop_or_zero(&mut stack);
-                            let data_val = pop_or_zero(&mut stack);
+                            let addr_val = stack.pop();
+                            let data_val = stack.pop();
                             let addr = addr_val as usize % len;
                             tape[addr] = data_val;
                         }
                         0x03 if instr < 0x10 => {
                             // WRITE64: *(<top> + 64) = <top-1>; pop; pop
-                            let addr_val = pop_or_zero(&mut stack);
-                            let data_val = pop_or_zero(&mut stack);
+                            let addr_val = stack.pop();
+                            let data_val = stack.pop();
                             let addr = ((addr_val as usize).wrapping_add(64)) % len;
                             tape[addr] = data_val;
                         }
                         0x04 if instr < 0x10 => {
                             // DUP: push <top>
-                            let top = top_or_zero(&stack);
-                            if stack.len() < MAX_STACK {
-                                stack.push(top);
-                            }
+                            let top = stack.top();
+                            stack.push(top);
                         }
                         0x05 if instr < 0x10 => {
                             // POP: discard top
-                            stack.pop(); // no-op if empty
+                            stack.pop();
                         }
                         0x06 if instr < 0x10 => {
                             // SWAP: swap <top> and <top-1>
-                            let slen = stack.len();
-                            if slen >= 2 {
-                                stack.swap(slen - 1, slen - 2);
-                            }
-                            // If < 2 elements, no-op (swapping with implicit 0s)
+                            stack.swap_top_two();
                         }
                         0x07 if instr < 0x10 => {
                             // SKIPNZ: if <top> != 0: pc++
-                            let top = top_or_zero(&stack);
-                            if top != 0 {
+                            if stack.top() != 0 {
                                 pc += 1;
                             }
                         }
                         0x08 if instr < 0x10 => {
                             // INC: <top> = <top> + 1
-                            if let Some(top) = stack.last_mut() {
+                            if let Some(top) = stack.top_mut() {
                                 *top = top.wrapping_add(1);
                             } else {
-                                // Empty stack: inc(0) = 1, push it
-                                if stack.len() < MAX_STACK {
-                                    stack.push(1);
-                                }
+                                stack.push(1);
                             }
                         }
                         0x09 if instr < 0x10 => {
                             // DEC: <top> = <top> - 1
-                            if let Some(top) = stack.last_mut() {
+                            if let Some(top) = stack.top_mut() {
                                 *top = top.wrapping_sub(1);
                             } else {
-                                // Empty stack: dec(0) = 255, push it
-                                if stack.len() < MAX_STACK {
-                                    stack.push(255);
-                                }
+                                stack.push(255);
                             }
                         }
                         0x0A if instr < 0x10 => {
                             // ADD: <top-1> = <top> + <top-1>; pop
-                            let a = pop_or_zero(&mut stack);
-                            if let Some(b) = stack.last_mut() {
+                            let a = stack.pop();
+                            if let Some(b) = stack.top_mut() {
                                 *b = a.wrapping_add(*b);
                             } else {
-                                // Both from empty: 0+0=0, push result
-                                if stack.len() < MAX_STACK {
-                                    stack.push(a); // a + 0
-                                }
+                                stack.push(a);
                             }
                         }
                         0x0B if instr < 0x10 => {
                             // SUB: <top-1> = <top> - <top-1>; pop
-                            let a = pop_or_zero(&mut stack);
-                            if let Some(b) = stack.last_mut() {
+                            let a = stack.pop();
+                            if let Some(b) = stack.top_mut() {
                                 *b = a.wrapping_sub(*b);
                             } else {
-                                if stack.len() < MAX_STACK {
-                                    stack.push(a); // a - 0
-                                }
+                                stack.push(a);
                             }
                         }
                         0x0C if instr < 0x10 => {
                             // COPY: *(<top> + 64) = *<top>; pop
-                            let addr_val = pop_or_zero(&mut stack);
+                            let addr_val = stack.pop();
                             let src = addr_val as usize % len;
                             let dst = ((addr_val as usize).wrapping_add(64)) % len;
                             tape[dst] = tape[src];
                         }
                         0x0D if instr < 0x10 => {
                             // RCOPY: *<top> = *(<top> + 64); pop
-                            let addr_val = pop_or_zero(&mut stack);
+                            let addr_val = stack.pop();
                             let dst = addr_val as usize % len;
                             let src = ((addr_val as usize).wrapping_add(64)) % len;
                             tape[dst] = tape[src];
@@ -171,10 +198,7 @@ impl Substrate for Forth {
                 // 01: push immediate (low 6 bits as unsigned value)
                 0b01 => {
                     let val = instr & 0x3F;
-                    if stack.len() < MAX_STACK {
-                        stack.push(val);
-                    }
-                    // Overflow: silently drop
+                    stack.push(val);
                 }
                 // 10 or 11: relative jump
                 _ => {

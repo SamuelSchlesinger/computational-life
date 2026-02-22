@@ -3,8 +3,8 @@ use complife::bff::Bff;
 use complife::forth::Forth;
 use complife::metrics::high_order_entropy;
 use complife::soup::{Soup, SoupConfig};
-use complife::soup2d::{Soup2d, Soup2dConfig};
 use complife::substrate::Substrate;
+use complife::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh};
 
 #[derive(Parser)]
 #[command(name = "complife", about = "Computational Life: primordial soup simulation")]
@@ -17,7 +17,7 @@ struct Cli {
     #[arg(long)]
     epochs: usize,
 
-    /// Number of programs in the population.
+    /// Number of programs in the population (0D mode only).
     #[arg(long, default_value_t = 1 << 17)]
     population_size: usize,
 
@@ -45,39 +45,69 @@ struct Cli {
     #[arg(long)]
     benchmark: bool,
 
-    /// Enable 2D spatial simulation on a WxH grid (e.g. 240x135).
+    /// Run simulation on a surface (flat:WxH, sphere:N, torus:MxN, obj:PATH).
     #[arg(long)]
-    grid: Option<String>,
+    surface: Option<String>,
+
+    /// Geodesic neighbor radius in mesh units (default: auto).
+    #[arg(long)]
+    neighbor_radius: Option<f32>,
 
     /// Launch live visualization window (requires --features viz).
     #[cfg(feature = "viz")]
     #[arg(long)]
     live: bool,
 
-    /// Spatial blur strength for 2D live viewer (0.0 = off, 1.0 = max).
+    /// Spatial blur strength for live viewer (0.0 = off, 1.0 = max).
     #[cfg(feature = "viz")]
     #[arg(long, default_value_t = 0.0)]
     blur: f32,
 }
 
-/// Parse a "WxH" grid specification string.
-fn parse_grid(s: &str) -> Result<(usize, usize), String> {
+/// Parse a "WxH" dimension string.
+fn parse_dimensions(s: &str) -> Result<(usize, usize), String> {
     let parts: Vec<&str> = s.split('x').collect();
     if parts.len() != 2 {
-        return Err(format!("Invalid grid format '{s}', expected WxH (e.g. 240x135)"));
+        return Err(format!("Invalid dimensions '{s}', expected WxH (e.g. 240x135)"));
     }
-    let w = parts[0].parse::<usize>().map_err(|e| format!("Invalid grid width: {e}"))?;
-    let h = parts[1].parse::<usize>().map_err(|e| format!("Invalid grid height: {e}"))?;
+    let w = parts[0].parse::<usize>().map_err(|e| format!("Invalid width: {e}"))?;
+    let h = parts[1].parse::<usize>().map_err(|e| format!("Invalid height: {e}"))?;
     if w == 0 || h == 0 {
-        return Err("Grid dimensions must be positive".to_string());
+        return Err("Dimensions must be positive".into());
     }
     Ok((w, h))
+}
+
+/// Parse a --surface spec into a SurfaceMesh.
+fn parse_surface(spec: &str, neighbor_radius: Option<f32>) -> Result<SurfaceMesh, String> {
+    let mut mesh = if let Some(rest) = spec.strip_prefix("flat:") {
+        let (w, h) = parse_dimensions(rest)?;
+        eprintln!("Surface: flat grid {w}x{h} ({} faces)", 2 * w * h);
+        SurfaceMesh::flat_grid(w, h)?
+    } else if let Some(rest) = spec.strip_prefix("sphere:") {
+        let sub = rest.parse::<usize>().map_err(|e| format!("Invalid subdivision level: {e}"))?;
+        let face_count = 20 * 4usize.pow(sub as u32);
+        eprintln!("Surface: icosphere subdivision {sub} ({face_count} faces)");
+        SurfaceMesh::icosphere(sub)?
+    } else if let Some(rest) = spec.strip_prefix("torus:") {
+        let (m, n) = parse_dimensions(rest)?;
+        eprintln!("Surface: torus {m}x{n} ({} faces)", 2 * m * n);
+        SurfaceMesh::torus(m, n)?
+    } else if let Some(rest) = spec.strip_prefix("obj:") {
+        SurfaceMesh::from_obj(rest)?
+    } else {
+        return Err(format!(
+            "Unknown surface type: '{spec}'. Expected flat:WxH, sphere:N, torus:MxN, or obj:PATH"
+        ));
+    };
+
+    mesh.compute_neighbors(neighbor_radius);
+    Ok(mesh)
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    // Dispatch based on substrate and mode.
     match cli.substrate.as_str() {
         "bff" => dispatch::<Bff>(&cli),
         "forth" => dispatch::<Forth>(&cli),
@@ -89,17 +119,15 @@ fn main() {
 }
 
 fn dispatch<S: Substrate + Send + Sync + 'static>(cli: &Cli) {
-    if let Some(ref grid_str) = cli.grid {
-        let (w, h) = match parse_grid(grid_str) {
-            Ok(dims) => dims,
+    if let Some(ref surface_spec) = cli.surface {
+        let mesh = match parse_surface(surface_spec, cli.neighbor_radius) {
+            Ok(m) => m,
             Err(e) => {
                 eprintln!("{e}");
                 std::process::exit(1);
             }
         };
-        let config = Soup2dConfig {
-            width: w,
-            height: h,
+        let config = SoupSurfaceConfig {
             program_size: cli.program_size,
             step_limit: cli.step_limit,
             mutation_rate: cli.mutation_rate,
@@ -107,14 +135,21 @@ fn dispatch<S: Substrate + Send + Sync + 'static>(cli: &Cli) {
 
         #[cfg(feature = "viz")]
         if cli.live {
-            complife::viz::run_viz_2d::<S>(config, cli.seed, cli.epochs, cli.metrics_interval, cli.blur);
+            complife::viz::run_viz_surface::<S>(
+                mesh,
+                config,
+                cli.seed,
+                cli.epochs,
+                cli.metrics_interval,
+                cli.blur,
+            );
             return;
         }
 
         if cli.benchmark {
-            run_benchmark_2d::<S>(config, cli.seed, cli.epochs);
+            run_benchmark_surface::<S>(mesh, config, cli.seed, cli.epochs);
         } else {
-            run_simulation_2d::<S>(config, cli.seed, cli.epochs, cli.metrics_interval);
+            run_simulation_surface::<S>(mesh, config, cli.seed, cli.epochs, cli.metrics_interval);
         }
     } else {
         let config = SoupConfig {
@@ -169,11 +204,7 @@ fn run_simulation<S: Substrate>(
     eprintln!();
 }
 
-fn run_benchmark<S: Substrate>(
-    config: SoupConfig,
-    seed: u64,
-    epochs: usize,
-) {
+fn run_benchmark<S: Substrate>(config: SoupConfig, seed: u64, epochs: usize) {
     let pop_size = config.population_size;
     let mut soup = Soup::new(config, seed);
 
@@ -197,18 +228,18 @@ fn run_benchmark<S: Substrate>(
     eprintln!("  Interactions/sec:  {interactions_per_sec:.0}");
 }
 
-fn run_simulation_2d<S: Substrate + Sync>(
-    config: Soup2dConfig,
+fn run_simulation_surface<S: Substrate + Sync>(
+    mesh: SurfaceMesh,
+    config: SoupSurfaceConfig,
     seed: u64,
     epochs: usize,
     metrics_interval: usize,
 ) {
-    let w = config.width;
-    let h = config.height;
-    let mut soup = Soup2d::new(config, seed);
+    let num_cells = mesh.num_cells();
+    let mut soup = SoupSurface::new(mesh, config, seed);
     let mut pop_buf = Vec::new();
 
-    eprintln!("2D simulation: {w}x{h} grid ({} programs)", w * h);
+    eprintln!("Surface simulation: {num_cells} programs");
     println!("epoch,hoe");
     soup.population_bytes_into(&mut pop_buf);
     let hoe = high_order_entropy(&pop_buf);
@@ -231,15 +262,14 @@ fn run_simulation_2d<S: Substrate + Sync>(
     eprintln!();
 }
 
-fn run_benchmark_2d<S: Substrate + Sync>(
-    config: Soup2dConfig,
+fn run_benchmark_surface<S: Substrate + Sync>(
+    mesh: SurfaceMesh,
+    config: SoupSurfaceConfig,
     seed: u64,
     epochs: usize,
 ) {
-    let w = config.width;
-    let h = config.height;
-    let pop_size = w * h;
-    let mut soup = Soup2d::new(config, seed);
+    let num_cells = mesh.num_cells();
+    let mut soup = SoupSurface::new(mesh, config, seed);
 
     let start = std::time::Instant::now();
     for _ in 0..epochs {
@@ -250,10 +280,9 @@ fn run_benchmark_2d<S: Substrate + Sync>(
 
     let epochs_per_sec = epochs as f64 / elapsed.as_secs_f64();
 
-    eprintln!("Benchmark results (2D):");
+    eprintln!("Benchmark results (surface):");
     eprintln!("  Epochs:            {epochs}");
-    eprintln!("  Grid:              {w}x{h}");
-    eprintln!("  Population size:   {pop_size}");
+    eprintln!("  Population size:   {num_cells}");
     eprintln!("  Elapsed:           {elapsed:.2?}");
     eprintln!("  Epochs/sec:        {epochs_per_sec:.1}");
 }

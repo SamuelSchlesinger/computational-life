@@ -2,13 +2,16 @@ use std::sync::{mpsc, Mutex};
 use std::thread;
 
 use bevy::prelude::*;
+use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::render::mesh::PrimitiveTopology;
+use bevy::render::render_asset::RenderAssetUsages;
 use bevy_egui::{EguiContexts, EguiPlugin, egui};
 use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints};
 
 use crate::metrics::{byte_frequency_histogram, high_order_entropy, unique_program_count, zero_byte_count};
 use crate::soup::{Soup, SoupConfig};
-use crate::soup2d::{Soup2d, Soup2dConfig};
 use crate::substrate::Substrate;
+use crate::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh, face_normal};
 
 /// Metrics snapshot sent from sim thread to render thread.
 #[derive(Clone)]
@@ -20,13 +23,11 @@ pub struct EpochMetrics {
     pub byte_histogram: [usize; 256],
 }
 
-/// Compact color representation of the 2D grid.
+/// Per-cell color snapshot for surface visualization.
 #[derive(Clone)]
-pub struct GridSnapshot {
-    pub width: usize,
-    pub height: usize,
-    /// RGBA bytes, length = width * height * 4.
-    pub pixels: Vec<u8>,
+pub struct SurfaceSnapshot {
+    /// RGBA bytes, length = num_cells * 4.
+    pub colors: Vec<u8>,
 }
 
 /// Commands sent from render thread to sim thread.
@@ -56,28 +57,38 @@ struct PlaybackState {
     max_epochs: usize,
 }
 
-/// Bevy resource wrapping the grid snapshot channel receiver (2D only).
-#[derive(Resource)]
-struct GridReceiver(Mutex<mpsc::Receiver<GridSnapshot>>);
+// ─── Surface-specific resources ──────────────────────────────────────────────
 
-/// Bevy resource storing the latest grid snapshot (2D only).
+/// Bevy resource wrapping the surface snapshot channel receiver.
+#[derive(Resource)]
+struct SurfaceSnapshotReceiver(Mutex<mpsc::Receiver<SurfaceSnapshot>>);
+
+/// Bevy resource storing the latest surface snapshot.
 #[derive(Resource, Default)]
-struct LatestGridSnapshot {
-    snapshot: Option<GridSnapshot>,
+struct LatestSurfaceSnapshot {
+    snapshot: Option<SurfaceSnapshot>,
     dirty: bool,
 }
 
-/// Bevy resource storing the latest grid texture handle.
-#[derive(Resource, Default)]
-struct GridTextureState {
-    texture_id: Option<egui::TextureId>,
-    width: usize,
-    height: usize,
+/// Bevy resource holding the mesh handle for color updates.
+#[derive(Resource)]
+struct SurfaceMeshHandle(Handle<Mesh>);
+
+/// Bevy resource holding the number of cells.
+#[derive(Resource)]
+struct NumCells(usize);
+
+/// Orbit camera component.
+#[derive(Component)]
+struct OrbitCamera {
+    focus: Vec3,
+    distance: f32,
+    yaw: f32,
+    pitch: f32,
 }
 
 /// Hash a program's bytes to an RGB color.
 fn program_to_color(program: &[u8]) -> [u8; 3] {
-    // Use a simple hash: FNV-1a on the program bytes, then extract RGB.
     let mut hash: u32 = 2166136261;
     for &b in program {
         hash ^= b as u32;
@@ -90,23 +101,68 @@ fn program_to_color(program: &[u8]) -> [u8; 3] {
     ]
 }
 
-/// Build a GridSnapshot from the 2D soup's programs.
-fn build_grid_snapshot(programs: &[Vec<u8>], width: usize, height: usize) -> GridSnapshot {
-    let mut pixels = Vec::with_capacity(width * height * 4);
-    fill_grid_pixels(programs, &mut pixels);
-    GridSnapshot { width, height, pixels }
-}
-
-/// Fill a reusable pixel buffer from program data (avoids re-allocation).
-fn fill_grid_pixels(programs: &[Vec<u8>], pixels: &mut Vec<u8>) {
-    pixels.clear();
+/// Fill a color buffer from program data (RGBA, one entry per cell).
+fn fill_surface_colors(programs: &[Vec<u8>], colors: &mut Vec<u8>) {
+    colors.clear();
     for prog in programs {
         let [r, g, b] = program_to_color(prog);
-        pixels.push(r);
-        pixels.push(g);
-        pixels.push(b);
-        pixels.push(255);
+        colors.push(r);
+        colors.push(g);
+        colors.push(b);
+        colors.push(255);
     }
+}
+
+/// Apply spatial blur in face-adjacency space.
+fn blur_surface_colors(
+    colors: &mut Vec<u8>,
+    scratch: &mut Vec<u8>,
+    face_adjacency: &[Vec<usize>],
+    alpha: f32,
+) {
+    if alpha <= 0.0 {
+        return;
+    }
+    let alpha = alpha.min(1.0);
+    let one_minus_alpha = 1.0 - alpha;
+    let num_faces = face_adjacency.len();
+    scratch.resize(num_faces * 4, 0);
+
+    for i in 0..num_faces {
+        let idx = i * 4;
+        let adj = &face_adjacency[i];
+        let count = adj.len() as f32;
+
+        if count == 0.0 {
+            scratch[idx..idx + 4].copy_from_slice(&colors[idx..idx + 4]);
+            continue;
+        }
+
+        let mut sum_r = 0u32;
+        let mut sum_g = 0u32;
+        let mut sum_b = 0u32;
+        for &j in adj {
+            let jdx = j * 4;
+            sum_r += colors[jdx] as u32;
+            sum_g += colors[jdx + 1] as u32;
+            sum_b += colors[jdx + 2] as u32;
+        }
+
+        let center_r = colors[idx] as f32;
+        let center_g = colors[idx + 1] as f32;
+        let center_b = colors[idx + 2] as f32;
+
+        let avg_r = sum_r as f32 / count;
+        let avg_g = sum_g as f32 / count;
+        let avg_b = sum_b as f32 / count;
+
+        scratch[idx] = (one_minus_alpha * center_r + alpha * avg_r) as u8;
+        scratch[idx + 1] = (one_minus_alpha * center_g + alpha * avg_g) as u8;
+        scratch[idx + 2] = (one_minus_alpha * center_b + alpha * avg_b) as u8;
+        scratch[idx + 3] = 255;
+    }
+
+    std::mem::swap(colors, scratch);
 }
 
 // ─── Standard (0D) visualization ─────────────────────────────────────────────
@@ -200,100 +256,43 @@ fn compute_metrics(soup: &Soup, epoch: usize, pop_buf: &mut Vec<u8>) -> EpochMet
     }
 }
 
-// ─── 2D visualization ────────────────────────────────────────────────────────
+// ─── Surface visualization ───────────────────────────────────────────────────
 
-/// Apply a spatial box blur to an RGBA pixel buffer.
-///
-/// Each pixel is blended with the average of its 4 direct neighbors (von Neumann):
-/// `out = (1 - alpha) * center + alpha * avg(neighbors)`
-///
-/// Alpha channel is left at 255. Edge pixels use fewer neighbors.
-fn blur_grid_pixels(pixels: &mut Vec<u8>, scratch: &mut Vec<u8>, width: usize, height: usize, alpha: f32) {
-    if alpha <= 0.0 {
-        return;
-    }
-    let alpha = alpha.min(1.0);
-    let one_minus_alpha = 1.0 - alpha;
-    let len = width * height * 4;
-    scratch.resize(len, 0);
-
-    for y in 0..height {
-        for x in 0..width {
-            let idx = (y * width + x) * 4;
-
-            // Accumulate neighbor values for R, G, B.
-            let mut sum_r = 0u32;
-            let mut sum_g = 0u32;
-            let mut sum_b = 0u32;
-            let mut count = 0u32;
-
-            if x > 0 {
-                let ni = idx - 4;
-                sum_r += pixels[ni] as u32;
-                sum_g += pixels[ni + 1] as u32;
-                sum_b += pixels[ni + 2] as u32;
-                count += 1;
-            }
-            if x + 1 < width {
-                let ni = idx + 4;
-                sum_r += pixels[ni] as u32;
-                sum_g += pixels[ni + 1] as u32;
-                sum_b += pixels[ni + 2] as u32;
-                count += 1;
-            }
-            if y > 0 {
-                let ni = idx - width * 4;
-                sum_r += pixels[ni] as u32;
-                sum_g += pixels[ni + 1] as u32;
-                sum_b += pixels[ni + 2] as u32;
-                count += 1;
-            }
-            if y + 1 < height {
-                let ni = idx + width * 4;
-                sum_r += pixels[ni] as u32;
-                sum_g += pixels[ni + 1] as u32;
-                sum_b += pixels[ni + 2] as u32;
-                count += 1;
-            }
-
-            let center_r = pixels[idx] as f32;
-            let center_g = pixels[idx + 1] as f32;
-            let center_b = pixels[idx + 2] as f32;
-
-            let avg_r = sum_r as f32 / count as f32;
-            let avg_g = sum_g as f32 / count as f32;
-            let avg_b = sum_b as f32 / count as f32;
-
-            scratch[idx] = (one_minus_alpha * center_r + alpha * avg_r) as u8;
-            scratch[idx + 1] = (one_minus_alpha * center_g + alpha * avg_g) as u8;
-            scratch[idx + 2] = (one_minus_alpha * center_b + alpha * avg_b) as u8;
-            scratch[idx + 3] = 255;
-        }
-    }
-
-    std::mem::swap(pixels, scratch);
-}
-
-/// Launch the live visualization for a 2D spatial soup.
-pub fn run_viz_2d<S: Substrate + Send + Sync + 'static>(
-    config: Soup2dConfig,
+/// Launch the live visualization for a surface soup.
+pub fn run_viz_surface<S: Substrate + Send + Sync + 'static>(
+    mesh: SurfaceMesh,
+    config: SoupSurfaceConfig,
     seed: u64,
     max_epochs: usize,
     metrics_interval: usize,
     blur: f32,
 ) {
     let (metrics_tx, metrics_rx) = mpsc::channel::<EpochMetrics>();
-    let (grid_tx, grid_rx) = mpsc::channel::<GridSnapshot>();
+    let (snap_tx, snap_rx) = mpsc::channel::<SurfaceSnapshot>();
     let (cmd_tx, cmd_rx) = mpsc::channel::<SimCommand>();
 
+    let num_cells = mesh.num_cells();
+    let face_adjacency = mesh.face_adjacency.clone();
+    let face_adjacency_for_thread = face_adjacency.clone();
+
+    // Build render mesh data before moving mesh to sim thread.
+    let render_positions = build_render_positions(&mesh);
+    let render_normals = build_render_normals(&mesh);
+    let num_render_vertices = render_positions.len();
+
+    let (center, radius) = mesh.bounding_sphere();
+
     thread::spawn(move || {
-        sim_thread_loop_2d::<S>(config, seed, max_epochs, metrics_interval, metrics_tx, grid_tx, cmd_rx, blur);
+        sim_thread_loop_surface::<S>(
+            mesh, config, seed, max_epochs, metrics_interval,
+            metrics_tx, snap_tx, cmd_rx, &face_adjacency_for_thread, blur,
+        );
     });
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Computational Life (2D)".into(),
+                title: "Computational Life (Surface)".into(),
                 resolution: (1280., 800.).into(),
                 ..default()
             }),
@@ -301,58 +300,99 @@ pub fn run_viz_2d<S: Substrate + Send + Sync + 'static>(
         }))
         .add_plugins(EguiPlugin)
         .insert_resource(SimReceiver(Mutex::new(metrics_rx)))
-        .insert_resource(GridReceiver(Mutex::new(grid_rx)))
+        .insert_resource(SurfaceSnapshotReceiver(Mutex::new(snap_rx)))
         .insert_resource(SimCommander(cmd_tx))
         .insert_resource(SimulationHistory::default())
-        .insert_resource(LatestGridSnapshot::default())
+        .insert_resource(LatestSurfaceSnapshot::default())
         .insert_resource(PlaybackState {
             playing: true,
             max_epochs,
         })
-        .insert_resource(GridTextureState::default())
+        .insert_resource(NumCells(num_cells))
+        .insert_resource(SurfaceRenderData {
+            positions: render_positions,
+            normals: render_normals,
+            num_render_vertices,
+            center,
+            radius,
+        })
+        .add_systems(Startup, setup_surface_scene)
         .add_systems(Update, drain_metrics)
-        .add_systems(Update, drain_grid)
-        .add_systems(Update, render_ui_2d.after(drain_metrics).after(drain_grid))
+        .add_systems(Update, drain_surface_snapshot)
+        .add_systems(Update, update_surface_mesh.after(drain_surface_snapshot))
+        .add_systems(Update, orbit_camera_system)
+        .add_systems(Update, render_ui_surface.after(drain_metrics).after(drain_surface_snapshot))
         .run();
 }
 
-/// Simulation thread for 2D soup.
-///
-/// Sends grid snapshots throttled to ~60fps to keep visuals responsive
-/// without wasting time on frames the renderer can't display.
-/// Expensive metrics (HOE etc.) are sent only at `metrics_interval`.
-fn sim_thread_loop_2d<S: Substrate + Sync>(
-    config: Soup2dConfig,
+/// Render data passed to the bevy app.
+#[derive(Resource)]
+struct SurfaceRenderData {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    num_render_vertices: usize,
+    center: [f32; 3],
+    radius: f32,
+}
+
+/// Build per-face-vertex positions (3 vertices per face, unindexed).
+fn build_render_positions(mesh: &SurfaceMesh) -> Vec<[f32; 3]> {
+    let mut positions = Vec::with_capacity(mesh.faces.len() * 3);
+    for face in &mesh.faces {
+        positions.push(mesh.vertices[face[0]]);
+        positions.push(mesh.vertices[face[1]]);
+        positions.push(mesh.vertices[face[2]]);
+    }
+    positions
+}
+
+/// Build per-face-vertex normals (flat shading).
+fn build_render_normals(mesh: &SurfaceMesh) -> Vec<[f32; 3]> {
+    let mut normals = Vec::with_capacity(mesh.faces.len() * 3);
+    for face in &mesh.faces {
+        let n = face_normal(
+            &mesh.vertices[face[0]],
+            &mesh.vertices[face[1]],
+            &mesh.vertices[face[2]],
+        );
+        normals.push(n);
+        normals.push(n);
+        normals.push(n);
+    }
+    normals
+}
+
+/// Simulation thread for surface soup.
+fn sim_thread_loop_surface<S: Substrate + Sync>(
+    mesh: SurfaceMesh,
+    config: SoupSurfaceConfig,
     seed: u64,
     max_epochs: usize,
     metrics_interval: usize,
     metrics_tx: mpsc::Sender<EpochMetrics>,
-    grid_tx: mpsc::Sender<GridSnapshot>,
+    snap_tx: mpsc::Sender<SurfaceSnapshot>,
     cmd_rx: mpsc::Receiver<SimCommand>,
+    face_adjacency: &[Vec<usize>],
     blur: f32,
 ) {
-    let w = config.width;
-    let h = config.height;
-    let mut soup = Soup2d::new(config, seed);
+    let mut soup = SoupSurface::new(mesh, config, seed);
     let mut paused = false;
     let mut epoch = 0usize;
 
-    // Reusable pixel buffer to avoid per-frame allocation.
-    let mut pixel_buf: Vec<u8> = Vec::with_capacity(w * h * 4);
-
-    // Reusable scratch buffer for blur (avoids per-frame allocation).
+    let num_cells = soup.mesh.num_cells();
+    let mut color_buf: Vec<u8> = Vec::with_capacity(num_cells * 4);
     let mut blur_scratch: Vec<u8> = Vec::new();
-
-    // Reusable population buffer to avoid per-metrics allocation.
     let mut pop_buf: Vec<u8> = Vec::new();
 
     // Send initial state.
-    let _ = metrics_tx.send(compute_metrics_2d(&soup, 0, &mut pop_buf));
-    let _ = grid_tx.send(build_grid_snapshot(&soup.programs, w, h));
+    let _ = metrics_tx.send(compute_metrics_surface(&soup, 0, &mut pop_buf));
+    fill_surface_colors(&soup.programs, &mut color_buf);
+    blur_surface_colors(&mut color_buf, &mut blur_scratch, face_adjacency, blur);
+    let _ = snap_tx.send(SurfaceSnapshot { colors: color_buf.clone() });
 
-    // Throttle grid snapshots to ~60fps.
-    let grid_interval = std::time::Duration::from_millis(16);
-    let mut last_grid_send = std::time::Instant::now();
+    // Throttle snapshots to ~60fps.
+    let snap_interval = std::time::Duration::from_millis(16);
+    let mut last_snap_send = std::time::Instant::now();
 
     loop {
         while let Ok(cmd) = cmd_rx.try_recv() {
@@ -371,32 +411,26 @@ fn sim_thread_loop_2d<S: Substrate + Sync>(
         soup.mutate();
         epoch += 1;
 
-        // Send grid snapshot at most ~60fps.
+        // Send snapshot at most ~60fps.
         let now = std::time::Instant::now();
-        if now.duration_since(last_grid_send) >= grid_interval || epoch == max_epochs {
-            fill_grid_pixels(&soup.programs, &mut pixel_buf);
-            blur_grid_pixels(&mut pixel_buf, &mut blur_scratch, w, h, blur);
-            let snap = GridSnapshot {
-                width: w,
-                height: h,
-                pixels: pixel_buf.clone(),
-            };
-            if grid_tx.send(snap).is_err() {
+        if now.duration_since(last_snap_send) >= snap_interval || epoch == max_epochs {
+            fill_surface_colors(&soup.programs, &mut color_buf);
+            blur_surface_colors(&mut color_buf, &mut blur_scratch, face_adjacency, blur);
+            if snap_tx.send(SurfaceSnapshot { colors: color_buf.clone() }).is_err() {
                 break;
             }
-            last_grid_send = now;
+            last_snap_send = now;
         }
 
-        // Send expensive metrics less frequently.
         if epoch % metrics_interval == 0 || epoch == max_epochs {
-            if metrics_tx.send(compute_metrics_2d(&soup, epoch, &mut pop_buf)).is_err() {
+            if metrics_tx.send(compute_metrics_surface(&soup, epoch, &mut pop_buf)).is_err() {
                 break;
             }
         }
     }
 }
 
-fn compute_metrics_2d(soup: &Soup2d, epoch: usize, pop_buf: &mut Vec<u8>) -> EpochMetrics {
+fn compute_metrics_surface(soup: &SoupSurface, epoch: usize, pop_buf: &mut Vec<u8>) -> EpochMetrics {
     soup.population_bytes_into(pop_buf);
     EpochMetrics {
         epoch,
@@ -407,6 +441,204 @@ fn compute_metrics_2d(soup: &Soup2d, epoch: usize, pop_buf: &mut Vec<u8>) -> Epo
     }
 }
 
+// ─── Surface bevy systems ────────────────────────────────────────────────────
+
+/// Startup system: create the 3D mesh, camera, and lights.
+fn setup_surface_scene(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    render_data: Res<SurfaceRenderData>,
+) {
+    // Build bevy mesh with per-face vertices (unindexed for flat shading + per-face colors).
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, render_data.positions.clone());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, render_data.normals.clone());
+
+    // Initial colors: all grey.
+    let initial_colors: Vec<[f32; 4]> = vec![[0.5, 0.5, 0.5, 1.0]; render_data.num_render_vertices];
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, initial_colors);
+
+    let mesh_handle = meshes.add(mesh);
+
+    let material = materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        perceptual_roughness: 0.8,
+        metallic: 0.0,
+        reflectance: 0.1,
+        ..default()
+    });
+
+    commands.spawn((
+        Mesh3d(mesh_handle.clone()),
+        MeshMaterial3d(material),
+        Transform::default(),
+    ));
+
+    commands.insert_resource(SurfaceMeshHandle(mesh_handle));
+
+    // Camera with orbit controls.
+    let center = Vec3::from_array(render_data.center);
+    let distance = render_data.radius * 2.5;
+    let yaw = 0.4_f32;
+    let pitch = -0.5_f32;
+
+    let rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+    let camera_pos = center + rotation * Vec3::new(0.0, 0.0, distance);
+
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_translation(camera_pos).looking_at(center, Vec3::Y),
+        OrbitCamera {
+            focus: center,
+            distance,
+            yaw,
+            pitch,
+        },
+    ));
+
+    // Directional light for depth cues.
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 12000.0,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.6, 0.4, 0.0)),
+    ));
+
+    // Ambient light so no face is fully dark.
+    commands.insert_resource(AmbientLight {
+        color: Color::WHITE,
+        brightness: 200.0,
+    });
+}
+
+/// System: drain surface snapshots, keeping only the latest.
+fn drain_surface_snapshot(
+    receiver: Res<SurfaceSnapshotReceiver>,
+    mut latest: ResMut<LatestSurfaceSnapshot>,
+) {
+    let rx = receiver.0.lock().unwrap();
+    while let Ok(snapshot) = rx.try_recv() {
+        latest.snapshot = Some(snapshot);
+        latest.dirty = true;
+    }
+}
+
+/// System: update the mesh vertex colors from the latest surface snapshot.
+fn update_surface_mesh(
+    mut meshes: ResMut<Assets<Mesh>>,
+    handle: Option<Res<SurfaceMeshHandle>>,
+    mut latest: ResMut<LatestSurfaceSnapshot>,
+    num_cells: Res<NumCells>,
+) {
+    if !latest.dirty {
+        return;
+    }
+    let Some(handle) = handle else { return };
+    let Some(ref snap) = latest.snapshot else { return };
+    let Some(mesh) = meshes.get_mut(&handle.0) else { return };
+
+    // Map per-cell RGBA to per-vertex colors (3 vertices per face).
+    let mut vertex_colors: Vec<[f32; 4]> = Vec::with_capacity(num_cells.0 * 3);
+    for i in 0..num_cells.0 {
+        let idx = i * 4;
+        let r = snap.colors[idx] as f32 / 255.0;
+        let g = snap.colors[idx + 1] as f32 / 255.0;
+        let b = snap.colors[idx + 2] as f32 / 255.0;
+        let color = [r, g, b, 1.0];
+        vertex_colors.push(color);
+        vertex_colors.push(color);
+        vertex_colors.push(color);
+    }
+
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_colors);
+    latest.dirty = false;
+}
+
+/// System: orbit camera with mouse controls.
+fn orbit_camera_system(
+    mut contexts: EguiContexts,
+    mut query: Query<(&mut OrbitCamera, &mut Transform)>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mut mouse_motion: EventReader<MouseMotion>,
+    mut scroll: EventReader<MouseWheel>,
+) {
+    let egui_wants_pointer = contexts.ctx_mut().is_pointer_over_area();
+
+    // Collect events (must drain even if egui has focus).
+    let motion: Vec<_> = mouse_motion.read().cloned().collect();
+    let scrolls: Vec<_> = scroll.read().cloned().collect();
+
+    if egui_wants_pointer {
+        return;
+    }
+
+    let Ok((mut orbit, mut transform)) = query.get_single_mut() else {
+        return;
+    };
+
+    // Left-drag: orbit.
+    if mouse_buttons.pressed(MouseButton::Left) {
+        for ev in &motion {
+            orbit.yaw -= ev.delta.x * 0.005;
+            orbit.pitch -= ev.delta.y * 0.005;
+            orbit.pitch = orbit.pitch.clamp(
+                -std::f32::consts::FRAC_PI_2 + 0.05,
+                std::f32::consts::FRAC_PI_2 - 0.05,
+            );
+        }
+    }
+
+    // Right-drag: pan.
+    if mouse_buttons.pressed(MouseButton::Right) {
+        for ev in &motion {
+            let right = transform.right().as_vec3();
+            let up = transform.up().as_vec3();
+            let pan_speed = orbit.distance * 0.001;
+            orbit.focus += (-right * ev.delta.x + up * ev.delta.y) * pan_speed;
+        }
+    }
+
+    // Scroll: zoom.
+    for ev in &scrolls {
+        orbit.distance *= 1.0 - ev.y * 0.03;
+        orbit.distance = orbit.distance.max(0.05);
+    }
+
+    // Update transform from orbit parameters.
+    let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
+    transform.translation = orbit.focus + rotation * Vec3::new(0.0, 0.0, orbit.distance);
+    transform.look_at(orbit.focus, Vec3::Y);
+}
+
+/// System: render egui UI with metrics (surface view — side panel only).
+fn render_ui_surface(
+    mut contexts: EguiContexts,
+    history: Res<SimulationHistory>,
+    mut playback: ResMut<PlaybackState>,
+    commander: Res<SimCommander>,
+) {
+    let ctx = contexts.ctx_mut();
+
+    egui::SidePanel::right("metrics_panel").min_width(350.0).show(ctx, |ui| {
+        render_controls_section(ui, &history, &mut playback, &commander);
+        ui.separator();
+
+        let entries = &history.entries;
+        if entries.is_empty() {
+            return;
+        }
+        let available_height = ui.available_height();
+        let plot_height = (available_height - 40.0) / 3.0;
+        render_time_series_plots_compact(ui, entries, plot_height);
+    });
+}
+
 // ─── Shared systems ──────────────────────────────────────────────────────────
 
 /// System: drain metrics from the channel each frame.
@@ -414,15 +646,6 @@ fn drain_metrics(receiver: Res<SimReceiver>, mut history: ResMut<SimulationHisto
     let rx = receiver.0.lock().unwrap();
     while let Ok(metrics) = rx.try_recv() {
         history.entries.push(metrics);
-    }
-}
-
-/// System: drain grid snapshots from the grid channel, keeping only the latest.
-fn drain_grid(receiver: Res<GridReceiver>, mut latest: ResMut<LatestGridSnapshot>) {
-    let rx = receiver.0.lock().unwrap();
-    while let Ok(snapshot) = rx.try_recv() {
-        latest.snapshot = Some(snapshot);
-        latest.dirty = true;
     }
 }
 
@@ -447,76 +670,6 @@ fn render_ui(
         let available_height = ui.available_height();
         let plot_height = (available_height - 60.0) / 4.0;
         render_time_series_plots(ui, entries, plot_height);
-    });
-}
-
-/// System: render egui UI with grid and plots (2D view).
-fn render_ui_2d(
-    mut contexts: EguiContexts,
-    history: Res<SimulationHistory>,
-    mut playback: ResMut<PlaybackState>,
-    commander: Res<SimCommander>,
-    mut grid_tex: ResMut<GridTextureState>,
-    mut latest_grid: ResMut<LatestGridSnapshot>,
-) {
-    // Only update the texture when new grid data has arrived.
-    if latest_grid.dirty {
-        if let Some(ref snap) = latest_grid.snapshot {
-            let size = [snap.width, snap.height];
-            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &snap.pixels);
-            let texture_opts = egui::TextureOptions {
-                magnification: egui::TextureFilter::Nearest,
-                minification: egui::TextureFilter::Nearest,
-                ..default()
-            };
-
-            let ctx = contexts.ctx_mut();
-            if let Some(existing_id) = grid_tex.texture_id {
-                ctx.tex_manager().write().free(existing_id);
-            }
-            let id = ctx.tex_manager().write().alloc(
-                "grid".into(),
-                egui::ImageData::Color(color_image.into()),
-                texture_opts,
-            );
-            grid_tex.texture_id = Some(id);
-            grid_tex.width = snap.width;
-            grid_tex.height = snap.height;
-        }
-        latest_grid.dirty = false;
-    }
-
-    let ctx = contexts.ctx_mut();
-
-    // Right panel with metrics plots.
-    egui::SidePanel::right("metrics_panel").min_width(350.0).show(ctx, |ui| {
-        render_controls_section(ui, &history, &mut playback, &commander);
-        ui.separator();
-
-        let entries = &history.entries;
-        if entries.is_empty() {
-            return;
-        }
-        let available_height = ui.available_height();
-        let plot_height = (available_height - 40.0) / 3.0;
-        render_time_series_plots_compact(ui, entries, plot_height);
-    });
-
-    // Central panel with grid image.
-    egui::CentralPanel::default().show(ctx, |ui| {
-        if let Some(tex_id) = grid_tex.texture_id {
-            let available = ui.available_size();
-            let grid_w = grid_tex.width as f32;
-            let grid_h = grid_tex.height as f32;
-            // Scale to fit while maintaining aspect ratio.
-            let scale = (available.x / grid_w).min(available.y / grid_h);
-            let display_size = egui::Vec2::new(grid_w * scale, grid_h * scale);
-            ui.centered_and_justified(|ui| {
-                ui.image(egui::load::SizedTexture::new(tex_id, display_size));
-            });
-        } else {
-            ui.label("Waiting for simulation data...");
-        }
     });
 }
 
@@ -569,7 +722,6 @@ fn render_controls_section(
 }
 
 fn render_time_series_plots(ui: &mut egui::Ui, entries: &[EpochMetrics], plot_height: f32) {
-    // 1. HOE
     ui.label("High-Order Entropy");
     let hoe_points: PlotPoints = entries.iter().map(|e| [e.epoch as f64, e.hoe]).collect();
     Plot::new("hoe_plot")
@@ -578,7 +730,6 @@ fn render_time_series_plots(ui: &mut egui::Ui, entries: &[EpochMetrics], plot_he
             plot_ui.line(Line::new(hoe_points).name("HOE"));
         });
 
-    // 2. Unique programs
     ui.label("Unique Programs");
     let unique_points: PlotPoints = entries.iter().map(|e| [e.epoch as f64, e.unique_count as f64]).collect();
     Plot::new("unique_plot")
@@ -587,7 +738,6 @@ fn render_time_series_plots(ui: &mut egui::Ui, entries: &[EpochMetrics], plot_he
             plot_ui.line(Line::new(unique_points).name("Unique"));
         });
 
-    // 3. Zero count
     ui.label("Zero Byte Count");
     let zero_points: PlotPoints = entries.iter().map(|e| [e.epoch as f64, e.zero_count as f64]).collect();
     Plot::new("zero_plot")
@@ -596,7 +746,6 @@ fn render_time_series_plots(ui: &mut egui::Ui, entries: &[EpochMetrics], plot_he
             plot_ui.line(Line::new(zero_points).name("Zeros"));
         });
 
-    // 4. Byte histogram
     ui.label("Byte Frequency Distribution");
     if let Some(latest) = entries.last() {
         let bars: Vec<Bar> = latest.byte_histogram.iter().enumerate()
@@ -611,7 +760,6 @@ fn render_time_series_plots(ui: &mut egui::Ui, entries: &[EpochMetrics], plot_he
 }
 
 fn render_time_series_plots_compact(ui: &mut egui::Ui, entries: &[EpochMetrics], plot_height: f32) {
-    // Compact version for 2D view side panel (3 plots, no histogram).
     ui.label("High-Order Entropy");
     let hoe_points: PlotPoints = entries.iter().map(|e| [e.epoch as f64, e.hoe]).collect();
     Plot::new("hoe_plot")
