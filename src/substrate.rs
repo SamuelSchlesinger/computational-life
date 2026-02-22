@@ -16,4 +16,7 @@ pub trait Substrate {
     /// Returns true if the byte is a meaningful instruction in this substrate
     /// (as opposed to a no-op). Used for visualization.
     fn is_instruction(byte: u8) -> bool;
+
+    /// Pretty-print a disassembly of the given tape for human inspection.
+    fn disassemble(tape: &[u8]) -> String;
 }

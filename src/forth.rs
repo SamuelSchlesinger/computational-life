@@ -228,6 +228,48 @@ impl Substrate for Forth {
         // 0x40-0x7F: push immediate, 0x80-0xFF: relative jump.
         byte <= 0x0D || byte >= 0x40
     }
+
+    fn disassemble(tape: &[u8]) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        for (addr, &b) in tape.iter().enumerate() {
+            let desc = match b >> 6 {
+                0b00 => {
+                    match b {
+                        0x00 => "READ".to_string(),
+                        0x01 => "READ64".to_string(),
+                        0x02 => "WRITE".to_string(),
+                        0x03 => "WRITE64".to_string(),
+                        0x04 => "DUP".to_string(),
+                        0x05 => "POP".to_string(),
+                        0x06 => "SWAP".to_string(),
+                        0x07 => "SKIPNZ".to_string(),
+                        0x08 => "INC".to_string(),
+                        0x09 => "DEC".to_string(),
+                        0x0A => "ADD".to_string(),
+                        0x0B => "SUB".to_string(),
+                        0x0C => "COPY".to_string(),
+                        0x0D => "RCOPY".to_string(),
+                        _ => "NOP".to_string(),
+                    }
+                }
+                0b01 => {
+                    let val = b & 0x3F;
+                    format!("PUSH {val}")
+                }
+                _ => {
+                    let offset = (b & 0x3F) as isize + 1;
+                    if b & 0x40 == 0 {
+                        format!("JMP +{offset}")
+                    } else {
+                        format!("JMP -{offset}")
+                    }
+                }
+            };
+            let _ = writeln!(out, "{addr:04X}: {b:02X}  {desc}");
+        }
+        out
+    }
 }
 
 #[cfg(test)]

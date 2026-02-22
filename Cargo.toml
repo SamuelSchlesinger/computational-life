@@ -7,7 +7,7 @@ edition = "2024"
 rand = { version = "0.8", features = ["small_rng"] }
 rayon = "1"
 brotli = "7"
-bevy = { version = "0.15", default-features = false, features = ["bevy_winit", "bevy_render", "bevy_core_pipeline", "bevy_pbr", "bevy_picking", "bevy_state", "tonemapping_luts", "x11"] }
+bevy = { version = "0.15", default-features = false, features = ["bevy_winit", "bevy_render", "bevy_core_pipeline", "bevy_pbr", "bevy_picking", "bevy_mesh_picking_backend", "bevy_state", "tonemapping_luts", "x11"] }
 bevy_egui = { version = "0.33" }
 egui_plot = { version = "0.31" }
 

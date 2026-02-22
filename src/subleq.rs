@@ -54,6 +54,27 @@ impl Substrate for Subleq {
         // branch target). There are no no-op bytes.
         true
     }
+
+    fn disassemble(tape: &[u8]) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        let mut pc = 0;
+        while pc + 2 < tape.len() {
+            let a = tape[pc];
+            let b = tape[pc + 1];
+            let c = tape[pc + 2];
+            let _ = writeln!(
+                out,
+                "{pc:04X}: [{a:02X} {b:02X} {c:02X}]  *{a} -= *{b}; if <=0 goto {c}"
+            );
+            pc += 3;
+        }
+        // Trailing bytes that don't form a complete triplet.
+        for i in pc..tape.len() {
+            let _ = writeln!(out, "{i:04X}: {:02X}     (trailing)", tape[i]);
+        }
+        out
+    }
 }
 
 /// The RSUBLEQ4 variant from Section 3.2 of the paper.
@@ -74,6 +95,28 @@ impl Substrate for Subleq {
 pub struct Rsubleq4;
 
 impl Substrate for Rsubleq4 {
+    fn disassemble(tape: &[u8]) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        let mut pc = 0;
+        while pc + 3 < tape.len() {
+            let a = tape[pc];
+            let b = tape[pc + 1];
+            let c = tape[pc + 2];
+            let d = tape[pc + 3] as i8;
+            let _ = writeln!(
+                out,
+                "{pc:04X}: [{a:02X} {b:02X} {c:02X} {:02X}]  *(pc+{a}) = *(pc+{b}) - *(pc+{c}); if <=0 goto pc{d:+}",
+                tape[pc + 3]
+            );
+            pc += 4;
+        }
+        for i in pc..tape.len() {
+            let _ = writeln!(out, "{i:04X}: {:02X}     (trailing)", tape[i]);
+        }
+        out
+    }
+
     fn execute(tape: &mut [u8], step_limit: usize) -> usize {
         let len = tape.len();
         if len < 4 {

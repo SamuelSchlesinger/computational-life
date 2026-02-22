@@ -131,6 +131,28 @@ impl Substrate for Bff {
     fn is_instruction(byte: u8) -> bool {
         matches!(byte, LESS | GREATER | LBRACE | RBRACE | MINUS | PLUS | DOT | COMMA | LBRACKET | RBRACKET)
     }
+
+    fn disassemble(tape: &[u8]) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        for (addr, &b) in tape.iter().enumerate() {
+            let (ch, mnemonic) = match b {
+                LESS => ("<", "HEAD0--"),
+                GREATER => (">", "HEAD0++"),
+                LBRACE => ("{", "HEAD1--"),
+                RBRACE => ("}", "HEAD1++"),
+                MINUS => ("-", "DEC"),
+                PLUS => ("+", "INC"),
+                DOT => (".", "COPY0->1"),
+                COMMA => (",", "COPY1->0"),
+                LBRACKET => ("[", "LOOP_START"),
+                RBRACKET => ("]", "LOOP_END"),
+                _ => ("", "NOP"),
+            };
+            let _ = writeln!(out, "{addr:04X}: {b:02X}  {ch:<2} {mnemonic}");
+        }
+        out
+    }
 }
 
 #[cfg(test)]

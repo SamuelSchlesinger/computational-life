@@ -3,6 +3,7 @@ use std::thread;
 
 use bevy::prelude::*;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, RayCastSettings};
 use bevy::render::mesh::PrimitiveTopology;
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy_egui::{EguiContexts, EguiPlugin, egui};
@@ -236,6 +237,14 @@ pub enum SimCommand {
         config: SoupSurfaceConfig,
         seed: u64,
     },
+    RequestProgram(usize),
+}
+
+/// Response carrying a cell's program bytes and disassembly.
+pub struct ProgramResponse {
+    cell: usize,
+    bytes: Vec<u8>,
+    disassembly: String,
 }
 
 // ─── Marker components ──────────────────────────────────────────────────────
@@ -285,7 +294,6 @@ struct LatestSurfaceSnapshot {
 struct SimResources {
     mesh_handle: Handle<Mesh>,
     num_cells: usize,
-    config: SoupSurfaceConfig,
     pending_rebuild: bool,
 }
 
@@ -300,6 +308,19 @@ struct SurfaceRenderData {
     center: [f32; 3],
     radius: f32,
 }
+
+#[derive(Resource)]
+struct ProgramResponseReceiver(Mutex<mpsc::Receiver<ProgramResponse>>);
+
+#[derive(Resource, Default)]
+struct SelectedCell {
+    cell_index: Option<usize>,
+    program_bytes: Option<Vec<u8>>,
+    disassembly: Option<String>,
+}
+
+#[derive(Resource, Default)]
+struct ShowHelp(bool);
 
 #[derive(Component)]
 struct OrbitCamera {
@@ -563,10 +584,11 @@ fn spawn_sim_thread(
     max_epochs: usize,
     metrics_interval: usize,
     blur: f32,
-) -> (mpsc::Receiver<EpochMetrics>, mpsc::Receiver<SurfaceSnapshot>, mpsc::Sender<SimCommand>) {
+) -> (mpsc::Receiver<EpochMetrics>, mpsc::Receiver<SurfaceSnapshot>, mpsc::Sender<SimCommand>, mpsc::Receiver<ProgramResponse>) {
     let (metrics_tx, metrics_rx) = mpsc::channel();
     let (snap_tx, snap_rx) = mpsc::channel();
     let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (prog_tx, prog_rx) = mpsc::channel();
 
     let face_adjacency = mesh.face_adjacency.clone();
 
@@ -575,7 +597,7 @@ fn spawn_sim_thread(
             thread::spawn(move || {
                 sim_thread_loop_surface::<Bff>(
                     mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur,
+                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
                 );
             });
         }
@@ -583,7 +605,7 @@ fn spawn_sim_thread(
             thread::spawn(move || {
                 sim_thread_loop_surface::<Forth>(
                     mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur,
+                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
                 );
             });
         }
@@ -591,7 +613,7 @@ fn spawn_sim_thread(
             thread::spawn(move || {
                 sim_thread_loop_surface::<Subleq>(
                     mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur,
+                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
                 );
             });
         }
@@ -599,13 +621,13 @@ fn spawn_sim_thread(
             thread::spawn(move || {
                 sim_thread_loop_surface::<Rsubleq4>(
                     mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur,
+                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
                 );
             });
         }
     }
 
-    (metrics_rx, snap_rx, cmd_tx)
+    (metrics_rx, snap_rx, cmd_tx, prog_rx)
 }
 
 // ─── Surface sim thread ─────────────────────────────────────────────────────
@@ -621,6 +643,7 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
     cmd_rx: mpsc::Receiver<SimCommand>,
     mut face_adjacency: Vec<Vec<usize>>,
     blur: f32,
+    prog_tx: mpsc::Sender<ProgramResponse>,
 ) {
     let mut soup = SoupSurface::new(mesh, config, seed);
     let mut paused = false;
@@ -649,6 +672,13 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
                 SimCommand::Pause => paused = true,
                 SimCommand::SetColorMode(mode) => color_mode = mode,
                 SimCommand::SetBlur(b) => blur = b,
+                SimCommand::RequestProgram(cell) => {
+                    if cell < soup.programs.len() {
+                        let bytes = soup.programs[cell].clone();
+                        let disassembly = S::disassemble(&bytes);
+                        let _ = prog_tx.send(ProgramResponse { cell, bytes, disassembly });
+                    }
+                }
                 SimCommand::ResetSurface { mesh: new_mesh, config: new_config, seed: new_seed } => {
                     face_adjacency = new_mesh.face_adjacency.clone();
                     soup = SoupSurface::new(new_mesh, new_config, new_seed);
@@ -745,6 +775,7 @@ pub fn run_app(menu_config: MenuConfig) {
         .add_plugins(EguiPlugin)
         .init_state::<AppState>()
         .insert_resource(menu_config)
+        .insert_resource(ShowHelp::default())
         // Menu lifecycle
         .add_systems(OnEnter(AppState::Menu), enter_menu)
         .add_systems(OnExit(AppState::Menu), exit_menu)
@@ -756,9 +787,17 @@ pub fn run_app(menu_config: MenuConfig) {
         .add_systems(Update, (
             drain_metrics,
             drain_surface_snapshot,
+            drain_program_response,
             update_surface_mesh.after(drain_surface_snapshot),
             orbit_camera_system,
-            render_ui_surface.after(drain_metrics).after(drain_surface_snapshot),
+            handle_mesh_click,
+        ).run_if(in_state(AppState::Simulating)))
+        .add_systems(Update, (
+            render_ui_surface
+                .after(drain_metrics)
+                .after(drain_surface_snapshot)
+                .after(drain_program_response)
+                .after(handle_mesh_click),
             apply_mesh_rebuild.after(render_ui_surface),
         ).run_if(in_state(AppState::Simulating)))
         .run();
@@ -780,12 +819,27 @@ fn render_menu_ui(
     mut contexts: EguiContexts,
     mut menu: ResMut<MenuConfig>,
     mut next_state: ResMut<NextState<AppState>>,
+    mut show_help: ResMut<ShowHelp>,
     windows: Query<&Window>,
 ) {
     if windows.is_empty() {
         return;
     }
     let ctx = contexts.ctx_mut();
+
+    // Help button in top-right corner.
+    egui::Area::new(egui::Id::new("help_button_menu"))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 4.0))
+        .show(ctx, |ui| {
+            if ui.button("?").clicked() {
+                show_help.0 = !show_help.0;
+            }
+        });
+
+    // Help overlay.
+    if show_help.0 {
+        render_help_window(ctx, &mut show_help);
+    }
 
     egui::CentralPanel::default().show(ctx, |ui| {
         ui.vertical_centered(|ui| {
@@ -907,7 +961,7 @@ fn enter_simulation(
         mutation_rate: menu.mutation_rate,
     };
 
-    let (metrics_rx, snap_rx, cmd_tx) = spawn_sim_thread(
+    let (metrics_rx, snap_rx, cmd_tx, prog_rx) = spawn_sim_thread(
         menu.substrate,
         surface_mesh,
         config,
@@ -925,6 +979,8 @@ fn enter_simulation(
     // Insert sim-only resources.
     commands.insert_resource(SimReceiver(Mutex::new(metrics_rx)));
     commands.insert_resource(SurfaceSnapshotReceiver(Mutex::new(snap_rx)));
+    commands.insert_resource(ProgramResponseReceiver(Mutex::new(prog_rx)));
+    commands.insert_resource(SelectedCell::default());
     commands.insert_resource(SimCommander(cmd_tx));
     commands.insert_resource(SimulationHistory::default());
     commands.insert_resource(LatestSurfaceSnapshot::default());
@@ -976,7 +1032,6 @@ fn enter_simulation(
     commands.insert_resource(SimResources {
         mesh_handle,
         num_cells,
-        config,
         pending_rebuild: false,
     });
 
@@ -1025,6 +1080,8 @@ fn exit_simulation(
     // Dropping receivers closes channels → sim thread exits.
     commands.remove_resource::<SimReceiver>();
     commands.remove_resource::<SurfaceSnapshotReceiver>();
+    commands.remove_resource::<ProgramResponseReceiver>();
+    commands.remove_resource::<SelectedCell>();
     commands.remove_resource::<SimCommander>();
     commands.remove_resource::<SimulationHistory>();
     commands.remove_resource::<LatestSurfaceSnapshot>();
@@ -1100,6 +1157,7 @@ fn orbit_camera_system(
     mut contexts: EguiContexts,
     mut query: Query<(&mut OrbitCamera, &mut Transform)>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut mouse_motion: EventReader<MouseMotion>,
     mut scroll: EventReader<MouseWheel>,
     windows: Query<&Window>,
@@ -1107,20 +1165,37 @@ fn orbit_camera_system(
     if windows.is_empty() {
         return;
     }
-    let egui_wants_pointer = contexts.ctx_mut().is_pointer_over_area();
+    let ctx = contexts.ctx_mut();
+    // Use both checks: is_pointer_over_area catches clicks/hovers,
+    // wants_pointer_input catches scroll gestures on egui widgets.
+    let egui_wants_pointer = ctx.is_pointer_over_area() || ctx.wants_pointer_input();
+
+    // Also check if the cursor is in the right side-panel region, which
+    // trackpad two-finger scrolls may not register as "pointer over area".
+    let cursor_over_panel = windows.single().cursor_position().map_or(false, |pos| {
+        let window_width = windows.single().width();
+        // The side panel is 350px min-width on the right side.
+        pos.x > window_width - 360.0
+    });
+
+    let block_input = egui_wants_pointer || cursor_over_panel;
 
     let motion: Vec<_> = mouse_motion.read().cloned().collect();
-    let scrolls: Vec<_> = scroll.read().cloned().collect();
 
-    if egui_wants_pointer {
+    if block_input {
+        scroll.clear();
         return;
     }
+
+    let scrolls: Vec<_> = scroll.read().cloned().collect();
 
     let Ok((mut orbit, mut transform)) = query.get_single_mut() else {
         return;
     };
 
-    if mouse_buttons.pressed(MouseButton::Left) {
+    let shift_held = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+
+    if mouse_buttons.pressed(MouseButton::Left) && !shift_held {
         for ev in &motion {
             orbit.yaw -= ev.delta.x * 0.005;
             orbit.pitch -= ev.delta.y * 0.005;
@@ -1150,24 +1225,97 @@ fn orbit_camera_system(
     transform.look_at(orbit.focus, Vec3::Y);
 }
 
+fn handle_mesh_click(
+    mut contexts: EguiContexts,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<OrbitCamera>>,
+    mut ray_cast: MeshRayCast,
+    mut selected: ResMut<SelectedCell>,
+    commander: Res<SimCommander>,
+) {
+    let shift_held = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    if !shift_held || !mouse_buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    if windows.is_empty() {
+        return;
+    }
+    let egui_wants_pointer = contexts.ctx_mut().is_pointer_over_area();
+    if egui_wants_pointer {
+        return;
+    }
+
+    let Ok((camera, cam_transform)) = camera_query.get_single() else { return };
+    let Some(cursor_pos) = windows.single().cursor_position() else { return };
+    let Ok(ray) = camera.viewport_to_world(cam_transform, cursor_pos) else { return };
+
+    let settings = RayCastSettings::default().always_early_exit();
+    let hits = ray_cast.cast_ray(ray, &settings);
+
+    if let Some((_entity, hit)) = hits.first() {
+        if let Some(tri_idx) = hit.triangle_index {
+            selected.cell_index = Some(tri_idx);
+            selected.program_bytes = None;
+            selected.disassembly = None;
+            let _ = commander.0.send(SimCommand::RequestProgram(tri_idx));
+        }
+    }
+}
+
+fn drain_program_response(
+    receiver: Res<ProgramResponseReceiver>,
+    mut selected: ResMut<SelectedCell>,
+) {
+    let rx = receiver.0.lock().unwrap();
+    while let Ok(resp) = rx.try_recv() {
+        if selected.cell_index == Some(resp.cell) {
+            selected.program_bytes = Some(resp.bytes);
+            selected.disassembly = Some(resp.disassembly);
+        }
+    }
+}
+
 fn render_ui_surface(
     mut contexts: EguiContexts,
-    mut history: ResMut<SimulationHistory>,
+    history: ResMut<SimulationHistory>,
     mut playback: ResMut<PlaybackState>,
     mut viz: ResMut<VizSettings>,
     commander: Res<SimCommander>,
-    mut gui: ResMut<SimSurfaceParams>,
-    mut sim: ResMut<SimResources>,
-    mut render_data: ResMut<SurfaceRenderData>,
-    mut latest_snap: ResMut<LatestSurfaceSnapshot>,
+    gui: Res<SimSurfaceParams>,
+    sim: Res<SimResources>,
     mut next_state: ResMut<NextState<AppState>>,
     mut menu: ResMut<MenuConfig>,
+    mut selected: ResMut<SelectedCell>,
+    mut show_help: ResMut<ShowHelp>,
     windows: Query<&Window>,
 ) {
     if windows.is_empty() {
         return;
     }
     let ctx = contexts.ctx_mut();
+
+    // Clear selection on mesh rebuild.
+    if sim.pending_rebuild {
+        selected.cell_index = None;
+        selected.program_bytes = None;
+        selected.disassembly = None;
+    }
+
+    // Help button in top-right corner (rendered before the side panel).
+    egui::Area::new(egui::Id::new("help_button_sim"))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-360.0, 4.0))
+        .show(ctx, |ui| {
+            if ui.button("?").clicked() {
+                show_help.0 = !show_help.0;
+            }
+        });
+
+    // Help overlay.
+    if show_help.0 {
+        render_help_window(ctx, &mut show_help);
+    }
 
     egui::SidePanel::right("metrics_panel").min_width(350.0).show(ctx, |ui| {
         // Back to Menu button at the top.
@@ -1179,24 +1327,19 @@ fn render_ui_surface(
         }
         ui.separator();
 
-        render_controls_section(ui, &history, &mut playback, &commander);
-        ui.separator();
-        render_surface_config(
-            ui, &mut gui, &mut sim, &mut render_data,
-            &mut history, &mut latest_snap, &commander,
-            &mut playback,
-        );
-        ui.separator();
-        render_viz_settings(ui, &mut viz, &commander);
-        ui.separator();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            render_controls_section(ui, &history, &mut playback, &commander);
+            ui.separator();
+            render_viz_settings(ui, &mut viz, &commander);
+            ui.separator();
+            render_selected_cell(ui, &selected);
+            ui.separator();
 
-        let entries = &history.entries;
-        if entries.is_empty() {
-            return;
-        }
-        let available_height = ui.available_height();
-        let plot_height = (available_height - 40.0) / 3.0;
-        render_time_series_plots_compact(ui, entries, plot_height);
+            let entries = &history.entries;
+            if !entries.is_empty() {
+                render_plots_section(ui, entries);
+            }
+        });
     });
 }
 
@@ -1314,99 +1457,34 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
     });
 }
 
-fn render_surface_config(
-    ui: &mut egui::Ui,
-    gui: &mut SimSurfaceParams,
-    sim: &mut SimResources,
-    render_data: &mut SurfaceRenderData,
-    history: &mut SimulationHistory,
-    latest_snap: &mut LatestSurfaceSnapshot,
-    commander: &SimCommander,
-    playback: &mut PlaybackState,
-) {
-    ui.heading("Surface");
-    ui.add_space(4.0);
-
-    render_surface_params(ui, &mut gui.0);
-
-    ui.add_space(4.0);
-
-    if ui.button("Generate").clicked() {
-        gui.0.last_error = None;
-        let spec = gui.0.current_spec();
-        match spec.build() {
-            Ok(mut mesh) => {
-                mesh.compute_neighbors(gui.0.neighbor_radius);
-                let num = mesh.num_cells();
-
-                let positions = build_render_positions(&mesh);
-                let normals = build_render_normals(&mesh);
-                let (center, radius) = mesh.bounding_sphere();
-
-                render_data.positions = positions;
-                render_data.normals = normals;
-                render_data.num_render_vertices = num * 3;
-                render_data.center = center;
-                render_data.radius = radius;
-                sim.num_cells = num;
-
-                history.entries.clear();
-                history.awaiting_reset = true;
-                latest_snap.snapshot = None;
-                latest_snap.dirty = false;
-
-                let _ = commander.0.send(SimCommand::ResetSurface {
-                    mesh,
-                    config: sim.config,
-                    seed: gui.0.seed,
-                });
-                let _ = commander.0.send(SimCommand::Play);
-                playback.playing = true;
-
-                sim.pending_rebuild = true;
-            }
-            Err(e) => {
-                gui.0.last_error = Some(e);
-            }
-        }
-    }
-
-    if let Some(ref err) = gui.0.last_error {
-        ui.colored_label(egui::Color32::RED, err);
-    }
-
-    ui.add_space(8.0);
-}
-
 fn render_viz_settings(
     ui: &mut egui::Ui,
     viz: &mut VizSettings,
     commander: &SimCommander,
 ) {
-    ui.heading("Visualization");
-    ui.add_space(4.0);
+    egui::CollapsingHeader::new("Visualization")
+        .default_open(true)
+        .show(ui, |ui| {
+            let prev_mode = viz.color_mode;
+            egui::ComboBox::from_label("Color mode")
+                .selected_text(viz.color_mode.label())
+                .show_ui(ui, |ui| {
+                    for mode in ColorMode::ALL {
+                        ui.selectable_value(&mut viz.color_mode, mode, mode.label());
+                    }
+                });
+            if viz.color_mode != prev_mode {
+                let _ = commander.0.send(SimCommand::SetColorMode(viz.color_mode));
+            }
 
-    let prev_mode = viz.color_mode;
-    egui::ComboBox::from_label("Color mode")
-        .selected_text(viz.color_mode.label())
-        .show_ui(ui, |ui| {
-            for mode in ColorMode::ALL {
-                ui.selectable_value(&mut viz.color_mode, mode, mode.label());
+            ui.add_space(4.0);
+
+            let prev_blur = viz.blur;
+            ui.add(egui::Slider::new(&mut viz.blur, 0.0..=1.0).text("Blur"));
+            if (viz.blur - prev_blur).abs() > f32::EPSILON {
+                let _ = commander.0.send(SimCommand::SetBlur(viz.blur));
             }
         });
-    if viz.color_mode != prev_mode {
-        let _ = commander.0.send(SimCommand::SetColorMode(viz.color_mode));
-    }
-
-    ui.add_space(4.0);
-
-    let prev_blur = viz.blur;
-    ui.add(egui::Slider::new(&mut viz.blur, 0.0..=1.0).text("Blur"));
-    if (viz.blur - prev_blur).abs() > f32::EPSILON {
-        let _ = commander.0.send(SimCommand::SetBlur(viz.blur));
-    }
-
-    ui.add_space(8.0);
 }
 
 fn render_controls_section(
@@ -1415,33 +1493,101 @@ fn render_controls_section(
     playback: &mut PlaybackState,
     commander: &SimCommander,
 ) {
-    ui.heading("Playback");
-    ui.add_space(8.0);
-
     let current_epoch = history.entries.last().map(|e| e.epoch).unwrap_or(0);
-    ui.label(format!("Epoch: {} / {}", current_epoch, playback.max_epochs));
+
+    egui::CollapsingHeader::new("Playback")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(format!("Epoch: {} / {}", current_epoch, playback.max_epochs));
+            ui.add_space(4.0);
+
+            let label = if playback.playing { "Pause" } else { "Play" };
+            if ui.button(label).clicked() {
+                playback.playing = !playback.playing;
+                let cmd = if playback.playing {
+                    SimCommand::Play
+                } else {
+                    SimCommand::Pause
+                };
+                let _ = commander.0.send(cmd);
+            }
+
+            if let Some(latest) = history.entries.last() {
+                ui.add_space(8.0);
+                ui.label(format!("HOE: {:.4}", latest.hoe));
+                ui.label(format!("Unique programs: {}", latest.unique_count));
+                ui.label(format!("Zero bytes: {}", latest.zero_count));
+            }
+        });
+}
+
+fn render_selected_cell(ui: &mut egui::Ui, selected: &SelectedCell) {
+    let header_text = match selected.cell_index {
+        None => "Selected Cell".to_string(),
+        Some(idx) => format!("Selected Cell #{idx}"),
+    };
+
+    egui::CollapsingHeader::new(header_text)
+        .default_open(true)
+        .show(ui, |ui| {
+            match selected.cell_index {
+                None => {
+                    ui.label("Shift+click a triangle to inspect its program");
+                }
+                Some(_) => {
+                    match &selected.disassembly {
+                        None => {
+                            ui.spinner();
+                        }
+                        Some(disasm) => {
+                            egui::ScrollArea::vertical()
+                                .max_height(200.0)
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut disasm.as_str())
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                });
+                        }
+                    }
+                }
+            }
+        });
     ui.add_space(8.0);
+}
 
-    let label = if playback.playing { "Pause" } else { "Play" };
-    if ui.button(label).clicked() {
-        playback.playing = !playback.playing;
-        let cmd = if playback.playing {
-            SimCommand::Play
-        } else {
-            SimCommand::Pause
-        };
-        let _ = commander.0.send(cmd);
-    }
-
-    ui.add_space(16.0);
-
-    if let Some(latest) = history.entries.last() {
-        ui.heading("Current Metrics");
-        ui.add_space(4.0);
-        ui.label(format!("HOE: {:.4}", latest.hoe));
-        ui.label(format!("Unique programs: {}", latest.unique_count));
-        ui.label(format!("Zero bytes: {}", latest.zero_count));
-    }
+fn render_help_window(ctx: &egui::Context, show_help: &mut ShowHelp) {
+    egui::Window::new("Help")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.heading("Computational Life");
+            ui.add_space(8.0);
+            ui.label("A simulation of self-replicating programs competing on a surface mesh. Programs copy themselves onto neighbors; mutation introduces variation.");
+            ui.add_space(12.0);
+            ui.heading("Controls");
+            ui.add_space(4.0);
+            egui::Grid::new("help_controls").show(ui, |ui| {
+                ui.label("Left-click drag");
+                ui.label("Orbit camera");
+                ui.end_row();
+                ui.label("Right-click drag");
+                ui.label("Pan camera");
+                ui.end_row();
+                ui.label("Scroll");
+                ui.label("Zoom");
+                ui.end_row();
+                ui.label("Shift+click");
+                ui.label("Inspect cell program");
+                ui.end_row();
+            });
+            ui.add_space(12.0);
+            if ui.button("Close").clicked() {
+                show_help.0 = false;
+            }
+        });
 }
 
 // ─── Plot helpers ────────────────────────────────────────────────────────────
@@ -1466,28 +1612,34 @@ fn decimated_plot_points(
     PlotPoints::new(points)
 }
 
-fn render_time_series_plots_compact(ui: &mut egui::Ui, entries: &[EpochMetrics], plot_height: f32) {
-    ui.label("High-Order Entropy");
-    let hoe_points = decimated_plot_points(entries, |e| [e.epoch as f64, e.hoe]);
-    Plot::new("hoe_plot")
-        .height(plot_height)
-        .show(ui, |plot_ui: &mut egui_plot::PlotUi| {
-            plot_ui.line(Line::new(hoe_points).name("HOE"));
-        });
+fn render_plots_section(ui: &mut egui::Ui, entries: &[EpochMetrics]) {
+    egui::CollapsingHeader::new("Plots")
+        .default_open(true)
+        .show(ui, |ui| {
+            let plot_height = 150.0;
 
-    ui.label("Unique Programs");
-    let unique_points = decimated_plot_points(entries, |e| [e.epoch as f64, e.unique_count as f64]);
-    Plot::new("unique_plot")
-        .height(plot_height)
-        .show(ui, |plot_ui: &mut egui_plot::PlotUi| {
-            plot_ui.line(Line::new(unique_points).name("Unique"));
-        });
+            ui.label("High-Order Entropy");
+            let hoe_points = decimated_plot_points(entries, |e| [e.epoch as f64, e.hoe]);
+            Plot::new("hoe_plot")
+                .height(plot_height)
+                .show(ui, |plot_ui: &mut egui_plot::PlotUi| {
+                    plot_ui.line(Line::new(hoe_points).name("HOE"));
+                });
 
-    ui.label("Zero Byte Count");
-    let zero_points = decimated_plot_points(entries, |e| [e.epoch as f64, e.zero_count as f64]);
-    Plot::new("zero_plot")
-        .height(plot_height)
-        .show(ui, |plot_ui: &mut egui_plot::PlotUi| {
-            plot_ui.line(Line::new(zero_points).name("Zeros"));
+            ui.label("Unique Programs");
+            let unique_points = decimated_plot_points(entries, |e| [e.epoch as f64, e.unique_count as f64]);
+            Plot::new("unique_plot")
+                .height(plot_height)
+                .show(ui, |plot_ui: &mut egui_plot::PlotUi| {
+                    plot_ui.line(Line::new(unique_points).name("Unique"));
+                });
+
+            ui.label("Zero Byte Count");
+            let zero_points = decimated_plot_points(entries, |e| [e.epoch as f64, e.zero_count as f64]);
+            Plot::new("zero_plot")
+                .height(plot_height)
+                .show(ui, |plot_ui: &mut egui_plot::PlotUi| {
+                    plot_ui.line(Line::new(zero_points).name("Zeros"));
+                });
         });
 }
