@@ -1,6 +1,7 @@
 use clap::Parser;
 use complife::bff::Bff;
 use complife::forth::Forth;
+use complife::subleq::{Subleq, Rsubleq4};
 use complife::metrics::high_order_entropy;
 use complife::soup::{Soup, SoupConfig};
 use complife::substrate::Substrate;
@@ -33,7 +34,7 @@ struct Cli {
     #[arg(long, default_value_t = 0.00024)]
     mutation_rate: f64,
 
-    /// Which instruction set to use (bff, forth).
+    /// Which instruction set to use (bff, forth, subleq, rsubleq4).
     #[arg(long, default_value = "bff")]
     substrate: String,
 
@@ -111,8 +112,10 @@ fn main() {
     match cli.substrate.as_str() {
         "bff" => dispatch::<Bff>(&cli),
         "forth" => dispatch::<Forth>(&cli),
+        "subleq" => dispatch::<Subleq>(&cli),
+        "rsubleq4" => dispatch::<Rsubleq4>(&cli),
         other => {
-            eprintln!("Unknown substrate: {other}. Available: bff, forth");
+            eprintln!("Unknown substrate: {other}. Available: bff, forth, subleq, rsubleq4");
             std::process::exit(1);
         }
     }
