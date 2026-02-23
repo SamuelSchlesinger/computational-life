@@ -250,7 +250,7 @@ mod tests {
         let mut tape = vec![0u8; 64];
         tape[0] = 200; // a = 200 % 64 = 8
         tape[1] = 201; // b = 201 % 64 = 9
-        tape[2] = 63;  // c = 63 (goto 63, which is oob for next instruction)
+        tape[2] = 63; // c = 63 (goto 63, which is oob for next instruction)
         tape[8] = 10;
         tape[9] = 3;
         Subleq::execute(&mut tape, 1);
@@ -365,10 +365,7 @@ mod tests {
         // From the paper: 9 16 20 4 4 5 19 4 0 0 12 4 -3 -3 9 4 -8 8 -7 -12 0 -1 -1 -64 -73
         // As u8 (two's complement):
         let replicator: [u8; 25] = [
-            9, 16, 20, 4,
-            4, 5, 19, 4,
-            0, 0, 12, 4,
-            253, 253, 9, 4,   // -3, -3, 9, 4
+            9, 16, 20, 4, 4, 5, 19, 4, 0, 0, 12, 4, 253, 253, 9, 4, // -3, -3, 9, 4
             248, 8, 249, 244, // -8, 8, -7, -12
             0, 255, 255, 192, 183, // 0, -1, -1, -64, -73
         ];
@@ -386,7 +383,11 @@ mod tests {
 
         // Verify the non-counter bytes match exactly.
         assert_eq!(&copy[..8], &replicator[..8], "bytes 0-7 should match");
-        assert_eq!(&copy[10..25], &replicator[10..25], "bytes 10-24 should match");
+        assert_eq!(
+            &copy[10..25],
+            &replicator[10..25],
+            "bytes 10-24 should match"
+        );
 
         // Run 2: the copy should also self-replicate.
         let mut tape2 = vec![0u8; 128];

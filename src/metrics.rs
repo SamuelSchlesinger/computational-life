@@ -64,7 +64,10 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(12345);
         let data: Vec<u8> = (0..8192).map(|_| rng.r#gen()).collect();
         let hoe = high_order_entropy(&data);
-        assert!(hoe > 0.9, "HOE of random data should be near 1.0, got {hoe}");
+        assert!(
+            hoe > 0.9,
+            "HOE of random data should be near 1.0, got {hoe}"
+        );
     }
 
     #[test]
@@ -72,7 +75,10 @@ mod tests {
         // All-same-byte data should be highly compressible.
         let data = vec![42u8; 8192];
         let hoe = high_order_entropy(&data);
-        assert!(hoe < 0.1, "HOE of repeated data should be well below 1.0, got {hoe}");
+        assert!(
+            hoe < 0.1,
+            "HOE of repeated data should be well below 1.0, got {hoe}"
+        );
     }
 
     #[test]

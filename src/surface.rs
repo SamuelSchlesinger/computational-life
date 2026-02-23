@@ -1,5 +1,5 @@
-use std::collections::{BinaryHeap, HashMap};
 use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 
 use rand::Rng;
 use rand::SeedableRng;
@@ -21,7 +21,10 @@ impl Eq for DijkNode {}
 
 impl Ord for DijkNode {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.dist.partial_cmp(&self.dist).unwrap_or(Ordering::Equal)
+        other
+            .dist
+            .partial_cmp(&self.dist)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -105,21 +108,25 @@ impl SurfaceMesh {
                 let mut dist = vec![f32::INFINITY; n];
                 dist[source] = 0.0;
                 let mut heap = BinaryHeap::new();
-                heap.push(DijkNode { dist: 0.0, face: source });
+                heap.push(DijkNode {
+                    dist: 0.0,
+                    face: source,
+                });
 
                 while let Some(node) = heap.pop() {
                     if node.dist > dist[node.face] {
                         continue;
                     }
                     for &adj in &face_adjacency[node.face] {
-                        let edge_dist = centroid_distance(
-                            &face_centroids[node.face],
-                            &face_centroids[adj],
-                        );
+                        let edge_dist =
+                            centroid_distance(&face_centroids[node.face], &face_centroids[adj]);
                         let new_dist = node.dist + edge_dist;
                         if new_dist <= radius && new_dist < dist[adj] {
                             dist[adj] = new_dist;
-                            heap.push(DijkNode { dist: new_dist, face: adj });
+                            heap.push(DijkNode {
+                                dist: new_dist,
+                                face: adj,
+                            });
                         }
                     }
                 }
@@ -144,7 +151,11 @@ impl SurfaceMesh {
         }
 
         let total_neighbors: usize = neighbor_ranges.iter().map(|(s, e)| e - s).sum();
-        let avg = if n > 0 { total_neighbors as f64 / n as f64 } else { 0.0 };
+        let avg = if n > 0 {
+            total_neighbors as f64 / n as f64
+        } else {
+            0.0
+        };
         eprintln!("  Average neighbors per face: {avg:.1}");
         eprintln!("  done.");
 
@@ -164,7 +175,11 @@ impl SurfaceMesh {
                 }
             }
         }
-        if count == 0 { 1.0 } else { total / count as f32 }
+        if count == 0 {
+            1.0
+        } else {
+            total / count as f32
+        }
     }
 
     /// Compute the bounding box center and radius (for camera framing).
@@ -203,9 +218,18 @@ impl SurfaceMesh {
         let phi = (1.0 + 5.0_f32.sqrt()) / 2.0;
 
         let mut vertices: Vec<[f32; 3]> = vec![
-            [-1.0,  phi, 0.0], [ 1.0,  phi, 0.0], [-1.0, -phi, 0.0], [ 1.0, -phi, 0.0],
-            [ 0.0, -1.0, phi], [ 0.0,  1.0, phi], [ 0.0, -1.0,-phi], [ 0.0,  1.0,-phi],
-            [ phi,  0.0,-1.0], [ phi,  0.0, 1.0], [-phi,  0.0,-1.0], [-phi,  0.0, 1.0],
+            [-1.0, phi, 0.0],
+            [1.0, phi, 0.0],
+            [-1.0, -phi, 0.0],
+            [1.0, -phi, 0.0],
+            [0.0, -1.0, phi],
+            [0.0, 1.0, phi],
+            [0.0, -1.0, -phi],
+            [0.0, 1.0, -phi],
+            [phi, 0.0, -1.0],
+            [phi, 0.0, 1.0],
+            [-phi, 0.0, -1.0],
+            [-phi, 0.0, 1.0],
         ];
 
         // Normalize to unit sphere.
@@ -217,10 +241,26 @@ impl SurfaceMesh {
         }
 
         let mut faces: Vec<[usize; 3]> = vec![
-            [0,11, 5], [0, 5, 1], [0, 1, 7], [0, 7,10], [0,10,11],
-            [1, 5, 9], [5,11, 4], [11,10, 2], [10, 7, 6], [7, 1, 8],
-            [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-            [4, 9, 5], [2, 4,11], [6, 2,10], [8, 6, 7], [9, 8, 1],
+            [0, 11, 5],
+            [0, 5, 1],
+            [0, 1, 7],
+            [0, 7, 10],
+            [0, 10, 11],
+            [1, 5, 9],
+            [5, 11, 4],
+            [11, 10, 2],
+            [10, 7, 6],
+            [7, 1, 8],
+            [3, 9, 4],
+            [3, 4, 2],
+            [3, 2, 6],
+            [3, 6, 8],
+            [3, 8, 9],
+            [4, 9, 5],
+            [2, 4, 11],
+            [6, 2, 10],
+            [8, 6, 7],
+            [9, 8, 1],
         ];
 
         for _ in 0..subdivisions {
@@ -341,7 +381,9 @@ impl SurfaceMesh {
                         .take(3)
                         .map(|s| s.parse::<f32>())
                         .collect::<Result<Vec<_>, _>>()
-                        .map_err(|e| format!("Line {}: invalid vertex coordinate: {e}", line_num + 1))?;
+                        .map_err(|e| {
+                            format!("Line {}: invalid vertex coordinate: {e}", line_num + 1)
+                        })?;
                     if coords.len() < 3 {
                         return Err(format!("Line {}: vertex needs 3 coordinates", line_num + 1));
                     }
@@ -352,15 +394,16 @@ impl SurfaceMesh {
                         .map(|s| {
                             // Handle v, v/vt, v/vt/vn, v//vn formats.
                             let idx_str = s.split('/').next().unwrap();
-                            idx_str
-                                .parse::<usize>()
-                                .map(|i| i - 1) // OBJ is 1-indexed
+                            idx_str.parse::<usize>().map(|i| i - 1) // OBJ is 1-indexed
                         })
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| format!("Line {}: invalid face index: {e}", line_num + 1))?;
 
                     if indices.len() < 3 {
-                        return Err(format!("Line {}: face needs at least 3 vertices", line_num + 1));
+                        return Err(format!(
+                            "Line {}: face needs at least 3 vertices",
+                            line_num + 1
+                        ));
                     }
                     // Fan triangulation for quads and n-gons.
                     for i in 1..indices.len() - 1 {
@@ -375,7 +418,11 @@ impl SurfaceMesh {
             return Err(format!("OBJ file '{path}' contains no faces"));
         }
 
-        eprintln!("Loaded OBJ: {} vertices, {} faces", vertices.len(), faces.len());
+        eprintln!(
+            "Loaded OBJ: {} vertices, {} faces",
+            vertices.len(),
+            faces.len()
+        );
         Self::from_geometry(vertices, faces)
     }
 
@@ -428,7 +475,9 @@ impl SurfaceMesh {
             let mut best = usize::MAX;
             let mut best_dist = f32::INFINITY;
             for (j, &u) in used.iter().enumerate() {
-                if u { continue; }
+                if u {
+                    continue;
+                }
                 let d = centroid_distance(&raw_centers[current], &raw_centers[j]);
                 if d < best_dist {
                     best_dist = d;
@@ -472,7 +521,11 @@ impl SurfaceMesh {
 
         // ── Phase C: measure holonomy twist via parallel transport ──
         let t0 = ring_tangents[0];
-        let up_candidate = if t0[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+        let up_candidate = if t0[1].abs() < 0.9 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
         let initial_normal = normalize3(cross3(t0, up_candidate));
         let initial_binormal = cross3(t0, initial_normal);
 
@@ -568,11 +621,25 @@ impl SurfaceMesh {
 /// Specification for generating a surface mesh.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SurfaceSpec {
-    Sphere { subdivisions: usize },
-    Torus { major: usize, minor: usize },
-    FlatGrid { width: usize, height: usize },
-    HamsterTunnel { num_spheres: usize, segments: usize, seed: u64 },
-    ObjFile { path: String },
+    Sphere {
+        subdivisions: usize,
+    },
+    Torus {
+        major: usize,
+        minor: usize,
+    },
+    FlatGrid {
+        width: usize,
+        height: usize,
+    },
+    HamsterTunnel {
+        num_spheres: usize,
+        segments: usize,
+        seed: u64,
+    },
+    ObjFile {
+        path: String,
+    },
 }
 
 impl SurfaceSpec {
@@ -582,9 +649,11 @@ impl SurfaceSpec {
             SurfaceSpec::Sphere { subdivisions } => SurfaceMesh::icosphere(*subdivisions),
             SurfaceSpec::Torus { major, minor } => SurfaceMesh::torus(*major, *minor),
             SurfaceSpec::FlatGrid { width, height } => SurfaceMesh::flat_grid(*width, *height),
-            SurfaceSpec::HamsterTunnel { num_spheres, segments, seed } => {
-                SurfaceMesh::hamster_tunnel(*num_spheres, *segments, *seed)
-            }
+            SurfaceSpec::HamsterTunnel {
+                num_spheres,
+                segments,
+                seed,
+            } => SurfaceMesh::hamster_tunnel(*num_spheres, *segments, *seed),
             SurfaceSpec::ObjFile { path } => SurfaceMesh::from_obj(path),
         }
     }
@@ -864,11 +933,9 @@ impl SoupSurface {
             self.tape_pool[base + ps..base + tape_size].copy_from_slice(&self.programs[second]);
         }
 
-        self.tape_pool
-            .par_chunks_mut(tape_size)
-            .for_each(|tape| {
-                S::execute(tape, step_limit);
-            });
+        self.tape_pool.par_chunks_mut(tape_size).for_each(|tape| {
+            S::execute(tape, step_limit);
+        });
 
         for (i, &(first, second)) in self.pairs.iter().enumerate() {
             let base = i * tape_size;
@@ -895,7 +962,9 @@ impl SoupSurface {
             let byte_idx = pos % ps;
             let bit = 1u8 << self.rng.gen_range(0..8);
             self.programs[prog_idx][byte_idx] ^= bit;
-            pos = pos.saturating_add(1).saturating_add(geometric_skip(&mut self.rng, inv_log));
+            pos = pos
+                .saturating_add(1)
+                .saturating_add(geometric_skip(&mut self.rng, inv_log));
         }
     }
 
@@ -1013,10 +1082,7 @@ mod tests {
         mesh.compute_neighbors(None);
         for i in 0..mesh.num_cells() {
             let (start, end) = mesh.neighbor_ranges[i];
-            assert!(
-                end > start,
-                "Face {i} has no geodesic neighbors"
-            );
+            assert!(end > start, "Face {i} has no geodesic neighbors");
         }
     }
 
@@ -1099,7 +1165,10 @@ f 4 1 5 8
         let mut buf = Vec::new();
         soup.population_bytes_into(&mut buf);
         let initial_hoe = high_order_entropy(&buf);
-        assert!(initial_hoe > 0.5, "Initial HOE should be high, got {initial_hoe}");
+        assert!(
+            initial_hoe > 0.5,
+            "Initial HOE should be high, got {initial_hoe}"
+        );
 
         for _ in 0..20 {
             soup.run_epoch::<Bff>();
@@ -1164,15 +1233,16 @@ f 4 1 5 8
         ];
         for (file, expected_verts, expected_faces) in cases {
             let path = format!("{examples_dir}/{file}");
-            let mesh = SurfaceMesh::from_obj(&path)
-                .unwrap_or_else(|e| panic!("{file}: {e}"));
+            let mesh = SurfaceMesh::from_obj(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
             assert_eq!(
-                mesh.vertices.len(), expected_verts,
+                mesh.vertices.len(),
+                expected_verts,
                 "{file}: expected {expected_verts} vertices, got {}",
                 mesh.vertices.len()
             );
             assert_eq!(
-                mesh.faces.len(), expected_faces,
+                mesh.faces.len(),
+                expected_faces,
                 "{file}: expected {expected_faces} faces, got {}",
                 mesh.faces.len()
             );
@@ -1182,7 +1252,9 @@ f 4 1 5 8
     #[test]
     fn test_obj_spec_builds() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/obj/icosahedron.obj");
-        let spec = SurfaceSpec::ObjFile { path: path.to_string() };
+        let spec = SurfaceSpec::ObjFile {
+            path: path.to_string(),
+        };
         assert_eq!(spec.label(), "OBJ File");
         let mesh = spec.build().unwrap();
         assert_eq!(mesh.faces.len(), 20);

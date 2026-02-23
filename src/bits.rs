@@ -183,16 +183,46 @@ impl Substrate for Bits {
         while pc < tape.len() {
             let b = tape[pc];
             let desc = match b >> 4 {
-                0x0 => { pc += 1; "COPY_BIT".to_string() }
-                0x1 => { pc += 1; "SET_BIT".to_string() }
-                0x2 => { pc += 1; "CLR_BIT".to_string() }
-                0x3 => { pc += 1; "SKIP_BIT".to_string() }
-                0x4 => { pc += 1; "READ_CARRY".to_string() }
-                0x5 => { pc += 1; "WRITE_CARRY".to_string() }
-                0x6 => { pc += 1; "FLIP_CARRY".to_string() }
-                0x7 => { pc += 1; "AND_CARRY".to_string() }
-                0x8 => { pc += 1; "OR_CARRY".to_string() }
-                0x9 => { pc += 1; "XOR_CARRY".to_string() }
+                0x0 => {
+                    pc += 1;
+                    "COPY_BIT".to_string()
+                }
+                0x1 => {
+                    pc += 1;
+                    "SET_BIT".to_string()
+                }
+                0x2 => {
+                    pc += 1;
+                    "CLR_BIT".to_string()
+                }
+                0x3 => {
+                    pc += 1;
+                    "SKIP_BIT".to_string()
+                }
+                0x4 => {
+                    pc += 1;
+                    "READ_CARRY".to_string()
+                }
+                0x5 => {
+                    pc += 1;
+                    "WRITE_CARRY".to_string()
+                }
+                0x6 => {
+                    pc += 1;
+                    "FLIP_CARRY".to_string()
+                }
+                0x7 => {
+                    pc += 1;
+                    "AND_CARRY".to_string()
+                }
+                0x8 => {
+                    pc += 1;
+                    "OR_CARRY".to_string()
+                }
+                0x9 => {
+                    pc += 1;
+                    "XOR_CARRY".to_string()
+                }
                 0xA => {
                     if pc + 1 < tape.len() {
                         let offset = tape[pc + 1] as i8;
@@ -217,12 +247,28 @@ impl Substrate for Bits {
                         "JNZ_CARRY ???".to_string()
                     }
                 }
-                0xC => { pc += 1; "BP_RESET".to_string() }
-                0xD => { pc += 1; "WP_RESET".to_string() }
-                0xE => { pc += 1; "HALT".to_string() }
-                _ => { pc += 1; "NOP".to_string() }
+                0xC => {
+                    pc += 1;
+                    "BP_RESET".to_string()
+                }
+                0xD => {
+                    pc += 1;
+                    "WP_RESET".to_string()
+                }
+                0xE => {
+                    pc += 1;
+                    "HALT".to_string()
+                }
+                _ => {
+                    pc += 1;
+                    "NOP".to_string()
+                }
             };
-            let display_pc = if matches!(b >> 4, 0xA | 0xB) && pc >= 2 { pc - 2 } else { pc - 1 };
+            let display_pc = if matches!(b >> 4, 0xA | 0xB) && pc >= 2 {
+                pc - 2
+            } else {
+                pc - 1
+            };
             let _ = writeln!(out, "{display_pc:04X}: {b:02X}  {desc}");
         }
         out
@@ -456,7 +502,11 @@ mod tests {
         Bits::execute(&mut tape, 8192);
 
         // First 4 bytes of second half should match the replicator.
-        assert_eq!(&tape[64..68], &replicator, "replicator bytes should be copied");
+        assert_eq!(
+            &tape[64..68],
+            &replicator,
+            "replicator bytes should be copied"
+        );
         // Rest should be zeros.
         assert_eq!(&tape[68..128], &vec![0u8; 60], "padding should be zeros");
     }

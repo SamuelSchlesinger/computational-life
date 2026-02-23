@@ -1,23 +1,26 @@
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::thread;
 
-use bevy::prelude::*;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, RayCastSettings};
+use bevy::prelude::*;
 use bevy::render::mesh::PrimitiveTopology;
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy_egui::{EguiContexts, EguiPlugin, egui};
 use egui_plot::{Line, Plot, PlotPoints};
 
 use crate::bff::Bff;
-use crate::forth::Forth;
-use crate::metrics::{byte_frequency_histogram, high_order_entropy, unique_program_count, zero_byte_count};
-use crate::substrate::Substrate;
-use crate::subleq::{Subleq, Rsubleq4};
-use crate::qop::Qop;
-use crate::skim::Skim;
-use crate::rig::Rig;
 use crate::bits::Bits;
+use crate::echo::Echo;
+use crate::forth::Forth;
+use crate::metrics::{
+    byte_frequency_histogram, high_order_entropy, unique_program_count, zero_byte_count,
+};
+use crate::qop::Qop;
+use crate::rig::Rig;
+use crate::skim::Skim;
+use crate::subleq::{Rsubleq4, Subleq};
+use crate::substrate::Substrate;
 use crate::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh, SurfaceSpec, face_normal};
 
 const MAX_PLOT_POINTS: usize = 1000;
@@ -43,10 +46,11 @@ pub enum SubstrateKind {
     Skim,
     Rig,
     Bits,
+    Echo,
 }
 
 impl SubstrateKind {
-    const ALL: [SubstrateKind; 8] = [
+    const ALL: [SubstrateKind; 9] = [
         SubstrateKind::Bff,
         SubstrateKind::Forth,
         SubstrateKind::Subleq,
@@ -55,6 +59,7 @@ impl SubstrateKind {
         SubstrateKind::Skim,
         SubstrateKind::Rig,
         SubstrateKind::Bits,
+        SubstrateKind::Echo,
     ];
 
     fn label(self) -> &'static str {
@@ -67,6 +72,7 @@ impl SubstrateKind {
             SubstrateKind::Skim => "Skim",
             SubstrateKind::Rig => "Rig",
             SubstrateKind::Bits => "Bits",
+            SubstrateKind::Echo => "Echo",
         }
     }
 }
@@ -146,25 +152,56 @@ impl Default for SurfaceParams {
 impl SurfaceParams {
     pub fn from_spec(spec: &SurfaceSpec, seed: u64, neighbor_radius: Option<f32>) -> Self {
         let shape = match spec {
-            SurfaceSpec::Sphere { subdivisions } => SurfaceShape::Sphere { subdivisions: *subdivisions },
-            SurfaceSpec::Torus { major, minor } => SurfaceShape::Torus { major: *major, minor: *minor },
-            SurfaceSpec::FlatGrid { width, height } => SurfaceShape::FlatGrid { width: *width, height: *height },
-            SurfaceSpec::HamsterTunnel { num_spheres, segments, .. } => {
-                SurfaceShape::HamsterTunnel { num_spheres: *num_spheres, segments: *segments }
-            }
+            SurfaceSpec::Sphere { subdivisions } => SurfaceShape::Sphere {
+                subdivisions: *subdivisions,
+            },
+            SurfaceSpec::Torus { major, minor } => SurfaceShape::Torus {
+                major: *major,
+                minor: *minor,
+            },
+            SurfaceSpec::FlatGrid { width, height } => SurfaceShape::FlatGrid {
+                width: *width,
+                height: *height,
+            },
+            SurfaceSpec::HamsterTunnel {
+                num_spheres,
+                segments,
+                ..
+            } => SurfaceShape::HamsterTunnel {
+                num_spheres: *num_spheres,
+                segments: *segments,
+            },
             SurfaceSpec::ObjFile { path } => SurfaceShape::ObjFile { path: path.clone() },
         };
-        Self { shape, seed, neighbor_radius, last_error: None }
+        Self {
+            shape,
+            seed,
+            neighbor_radius,
+            last_error: None,
+        }
     }
 
     pub fn current_spec(&self) -> SurfaceSpec {
         match &self.shape {
-            SurfaceShape::Sphere { subdivisions } => SurfaceSpec::Sphere { subdivisions: *subdivisions },
-            SurfaceShape::Torus { major, minor } => SurfaceSpec::Torus { major: *major, minor: *minor },
-            SurfaceShape::FlatGrid { width, height } => SurfaceSpec::FlatGrid { width: *width, height: *height },
-            SurfaceShape::HamsterTunnel { num_spheres, segments } => {
-                SurfaceSpec::HamsterTunnel { num_spheres: *num_spheres, segments: *segments, seed: self.seed }
-            }
+            SurfaceShape::Sphere { subdivisions } => SurfaceSpec::Sphere {
+                subdivisions: *subdivisions,
+            },
+            SurfaceShape::Torus { major, minor } => SurfaceSpec::Torus {
+                major: *major,
+                minor: *minor,
+            },
+            SurfaceShape::FlatGrid { width, height } => SurfaceSpec::FlatGrid {
+                width: *width,
+                height: *height,
+            },
+            SurfaceShape::HamsterTunnel {
+                num_spheres,
+                segments,
+            } => SurfaceSpec::HamsterTunnel {
+                num_spheres: *num_spheres,
+                segments: *segments,
+                seed: self.seed,
+            },
             SurfaceShape::ObjFile { path } => SurfaceSpec::ObjFile { path: path.clone() },
         }
     }
@@ -432,7 +469,9 @@ fn fill_colors_neighbor_similarity(
 
         let mut total_dist = 0u32;
         for &ni in &neighbor_indices[start..end] {
-            let dist: u32 = prog.iter().zip(programs[ni].iter())
+            let dist: u32 = prog
+                .iter()
+                .zip(programs[ni].iter())
                 .map(|(a, b)| (a ^ b).count_ones())
                 .sum();
             total_dist += dist;
@@ -603,7 +642,12 @@ fn spawn_sim_thread(
     max_epochs: usize,
     metrics_interval: usize,
     blur: f32,
-) -> (mpsc::Receiver<EpochMetrics>, mpsc::Receiver<SurfaceSnapshot>, mpsc::Sender<SimCommand>, mpsc::Receiver<ProgramResponse>) {
+) -> (
+    mpsc::Receiver<EpochMetrics>,
+    mpsc::Receiver<SurfaceSnapshot>,
+    mpsc::Sender<SimCommand>,
+    mpsc::Receiver<ProgramResponse>,
+) {
     let (metrics_tx, metrics_rx) = mpsc::channel();
     let (snap_tx, snap_rx) = mpsc::channel();
     let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -615,64 +659,153 @@ fn spawn_sim_thread(
         SubstrateKind::Bff => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Bff>(
-                    mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
                 );
             });
         }
         SubstrateKind::Forth => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Forth>(
-                    mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
                 );
             });
         }
         SubstrateKind::Subleq => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Subleq>(
-                    mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
                 );
             });
         }
         SubstrateKind::Rsubleq4 => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Rsubleq4>(
-                    mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
                 );
             });
         }
         SubstrateKind::Qop => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Qop>(
-                    mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
                 );
             });
         }
         SubstrateKind::Skim => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Skim>(
-                    mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
                 );
             });
         }
         SubstrateKind::Rig => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Rig>(
-                    mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
                 );
             });
         }
         SubstrateKind::Bits => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Bits>(
-                    mesh, config, seed, max_epochs, metrics_interval,
-                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Echo => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Echo>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
                 );
             });
         }
@@ -709,9 +842,17 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
 
     // Send initial state.
     let _ = metrics_tx.send(compute_metrics_surface(&soup, 0, &mut pop_buf));
-    fill_colors_for_mode::<S>(color_mode, &soup.programs, &soup.mesh.neighbor_indices, &soup.mesh.neighbor_ranges, &mut color_buf);
+    fill_colors_for_mode::<S>(
+        color_mode,
+        &soup.programs,
+        &soup.mesh.neighbor_indices,
+        &soup.mesh.neighbor_ranges,
+        &mut color_buf,
+    );
     blur_surface_colors(&mut color_buf, &mut blur_scratch, &face_adjacency, blur);
-    let _ = snap_tx.send(SurfaceSnapshot { colors: color_buf.clone() });
+    let _ = snap_tx.send(SurfaceSnapshot {
+        colors: color_buf.clone(),
+    });
 
     let snap_interval = std::time::Duration::from_millis(16);
     let mut last_snap_send = std::time::Instant::now();
@@ -727,10 +868,18 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
                     if cell < soup.programs.len() {
                         let bytes = soup.programs[cell].clone();
                         let disassembly = S::disassemble(&bytes);
-                        let _ = prog_tx.send(ProgramResponse { cell, bytes, disassembly });
+                        let _ = prog_tx.send(ProgramResponse {
+                            cell,
+                            bytes,
+                            disassembly,
+                        });
                     }
                 }
-                SimCommand::ResetSurface { mesh: new_mesh, config: new_config, seed: new_seed } => {
+                SimCommand::ResetSurface {
+                    mesh: new_mesh,
+                    config: new_config,
+                    seed: new_seed,
+                } => {
                     face_adjacency = new_mesh.face_adjacency.clone();
                     soup = SoupSurface::new(new_mesh, new_config, new_seed);
                     epoch = 0;
@@ -739,9 +888,17 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
                     blur_scratch = Vec::new();
                     pop_buf = Vec::new();
                     let _ = metrics_tx.send(compute_metrics_surface(&soup, 0, &mut pop_buf));
-                    fill_colors_for_mode::<S>(color_mode, &soup.programs, &soup.mesh.neighbor_indices, &soup.mesh.neighbor_ranges, &mut color_buf);
+                    fill_colors_for_mode::<S>(
+                        color_mode,
+                        &soup.programs,
+                        &soup.mesh.neighbor_indices,
+                        &soup.mesh.neighbor_ranges,
+                        &mut color_buf,
+                    );
                     blur_surface_colors(&mut color_buf, &mut blur_scratch, &face_adjacency, blur);
-                    let _ = snap_tx.send(SurfaceSnapshot { colors: color_buf.clone() });
+                    let _ = snap_tx.send(SurfaceSnapshot {
+                        colors: color_buf.clone(),
+                    });
                 }
             }
         }
@@ -757,23 +914,41 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
 
         let now = std::time::Instant::now();
         if now.duration_since(last_snap_send) >= snap_interval || epoch == max_epochs {
-            fill_colors_for_mode::<S>(color_mode, &soup.programs, &soup.mesh.neighbor_indices, &soup.mesh.neighbor_ranges, &mut color_buf);
+            fill_colors_for_mode::<S>(
+                color_mode,
+                &soup.programs,
+                &soup.mesh.neighbor_indices,
+                &soup.mesh.neighbor_ranges,
+                &mut color_buf,
+            );
             blur_surface_colors(&mut color_buf, &mut blur_scratch, &face_adjacency, blur);
-            if snap_tx.send(SurfaceSnapshot { colors: color_buf.clone() }).is_err() {
+            if snap_tx
+                .send(SurfaceSnapshot {
+                    colors: color_buf.clone(),
+                })
+                .is_err()
+            {
                 break;
             }
             last_snap_send = now;
         }
 
         if epoch % metrics_interval == 0 || epoch == max_epochs {
-            if metrics_tx.send(compute_metrics_surface(&soup, epoch, &mut pop_buf)).is_err() {
+            if metrics_tx
+                .send(compute_metrics_surface(&soup, epoch, &mut pop_buf))
+                .is_err()
+            {
                 break;
             }
         }
     }
 }
 
-fn compute_metrics_surface(soup: &SoupSurface, epoch: usize, pop_buf: &mut Vec<u8>) -> EpochMetrics {
+fn compute_metrics_surface(
+    soup: &SoupSurface,
+    epoch: usize,
+    pop_buf: &mut Vec<u8>,
+) -> EpochMetrics {
     soup.population_bytes_into(pop_buf);
     EpochMetrics {
         epoch,
@@ -835,22 +1010,30 @@ pub fn run_app(menu_config: MenuConfig) {
         .add_systems(OnEnter(AppState::Simulating), enter_simulation)
         .add_systems(OnExit(AppState::Simulating), exit_simulation)
         // Simulation update systems (all gated)
-        .add_systems(Update, (
-            drain_metrics,
-            drain_surface_snapshot,
-            drain_program_response,
-            update_surface_mesh.after(drain_surface_snapshot),
-            orbit_camera_system,
-            handle_mesh_click,
-        ).run_if(in_state(AppState::Simulating)))
-        .add_systems(Update, (
-            render_ui_surface
-                .after(drain_metrics)
-                .after(drain_surface_snapshot)
-                .after(drain_program_response)
-                .after(handle_mesh_click),
-            apply_mesh_rebuild.after(render_ui_surface),
-        ).run_if(in_state(AppState::Simulating)))
+        .add_systems(
+            Update,
+            (
+                drain_metrics,
+                drain_surface_snapshot,
+                drain_program_response,
+                update_surface_mesh.after(drain_surface_snapshot),
+                orbit_camera_system,
+                handle_mesh_click,
+            )
+                .run_if(in_state(AppState::Simulating)),
+        )
+        .add_systems(
+            Update,
+            (
+                render_ui_surface
+                    .after(drain_metrics)
+                    .after(drain_surface_snapshot)
+                    .after(drain_program_response)
+                    .after(handle_mesh_click),
+                apply_mesh_rebuild.after(render_ui_surface),
+            )
+                .run_if(in_state(AppState::Simulating)),
+        )
         .run();
 }
 
@@ -927,19 +1110,35 @@ fn render_menu_ui(
             menu.program_size = ps as usize;
 
             let mut sl = menu.step_limit as f64;
-            ui.add(egui::Slider::new(&mut sl, 64.0..=1_000_000.0).logarithmic(true).text("Step limit"));
+            ui.add(
+                egui::Slider::new(&mut sl, 64.0..=1_000_000.0)
+                    .logarithmic(true)
+                    .text("Step limit"),
+            );
             menu.step_limit = sl as usize;
 
             let mut mr = menu.mutation_rate;
-            ui.add(egui::Slider::new(&mut mr, 0.0..=0.01).logarithmic(true).text("Mutation rate"));
+            ui.add(
+                egui::Slider::new(&mut mr, 0.0..=0.01)
+                    .logarithmic(true)
+                    .text("Mutation rate"),
+            );
             menu.mutation_rate = mr;
 
             let mut me = menu.max_epochs as f64;
-            ui.add(egui::Slider::new(&mut me, 100.0..=10_000_000.0).logarithmic(true).text("Max epochs"));
+            ui.add(
+                egui::Slider::new(&mut me, 100.0..=10_000_000.0)
+                    .logarithmic(true)
+                    .text("Max epochs"),
+            );
             menu.max_epochs = me as usize;
 
             let mut mi = menu.metrics_interval as f64;
-            ui.add(egui::Slider::new(&mut mi, 1.0..=10_000.0).logarithmic(true).text("Metrics interval"));
+            ui.add(
+                egui::Slider::new(&mut mi, 1.0..=10_000.0)
+                    .logarithmic(true)
+                    .text("Metrics interval"),
+            );
             menu.metrics_interval = mi as usize;
 
             ui.add_space(12.0);
@@ -1097,7 +1296,12 @@ fn enter_simulation(
     commands.spawn((
         Camera3d::default(),
         Transform::from_translation(camera_pos).looking_at(center_v, Vec3::Y),
-        OrbitCamera { focus: center_v, distance, yaw, pitch },
+        OrbitCamera {
+            focus: center_v,
+            distance,
+            yaw,
+            pitch,
+        },
         SimEntity,
     ));
 
@@ -1118,10 +1322,7 @@ fn enter_simulation(
     });
 }
 
-fn exit_simulation(
-    mut commands: Commands,
-    sim_entities: Query<Entity, With<SimEntity>>,
-) {
+fn exit_simulation(mut commands: Commands, sim_entities: Query<Entity, With<SimEntity>>) {
     // Despawn all sim entities.
     for entity in &sim_entities {
         commands.entity(entity).despawn();
@@ -1179,8 +1380,12 @@ fn update_surface_mesh(
     if !latest.dirty {
         return;
     }
-    let Some(ref snap) = latest.snapshot else { return };
-    let Some(mesh) = meshes.get_mut(&sim.mesh_handle) else { return };
+    let Some(ref snap) = latest.snapshot else {
+        return;
+    };
+    let Some(mesh) = meshes.get_mut(&sim.mesh_handle) else {
+        return;
+    };
 
     let expected_len = sim.num_cells * 4;
     if snap.colors.len() != expected_len {
@@ -1298,9 +1503,15 @@ fn handle_mesh_click(
         return;
     }
 
-    let Ok((camera, cam_transform)) = camera_query.get_single() else { return };
-    let Some(cursor_pos) = windows.single().cursor_position() else { return };
-    let Ok(ray) = camera.viewport_to_world(cam_transform, cursor_pos) else { return };
+    let Ok((camera, cam_transform)) = camera_query.get_single() else {
+        return;
+    };
+    let Some(cursor_pos) = windows.single().cursor_position() else {
+        return;
+    };
+    let Ok(ray) = camera.viewport_to_world(cam_transform, cursor_pos) else {
+        return;
+    };
 
     let settings = RayCastSettings::default().always_early_exit();
     let hits = ray_cast.cast_ray(ray, &settings);
@@ -1368,30 +1579,32 @@ fn render_ui_surface(
         render_help_window(ctx, &mut show_help);
     }
 
-    egui::SidePanel::right("metrics_panel").min_width(350.0).show(ctx, |ui| {
-        // Back to Menu button at the top.
-        if ui.button("Back to Menu").clicked() {
-            menu.color_mode = viz.color_mode;
-            menu.blur = viz.blur;
-            menu.surface = gui.0.clone();
-            next_state.set(AppState::Menu);
-        }
-        ui.separator();
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            render_controls_section(ui, &history, &mut playback, &commander);
-            ui.separator();
-            render_viz_settings(ui, &mut viz, &commander);
-            ui.separator();
-            render_selected_cell(ui, &selected);
-            ui.separator();
-
-            let entries = &history.entries;
-            if !entries.is_empty() {
-                render_plots_section(ui, entries);
+    egui::SidePanel::right("metrics_panel")
+        .min_width(350.0)
+        .show(ctx, |ui| {
+            // Back to Menu button at the top.
+            if ui.button("Back to Menu").clicked() {
+                menu.color_mode = viz.color_mode;
+                menu.blur = viz.blur;
+                menu.surface = gui.0.clone();
+                next_state.set(AppState::Menu);
             }
+            ui.separator();
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                render_controls_section(ui, &history, &mut playback, &commander);
+                ui.separator();
+                render_viz_settings(ui, &mut viz, &commander);
+                ui.separator();
+                render_selected_cell(ui, &selected);
+                ui.separator();
+
+                let entries = &history.entries;
+                if !entries.is_empty() {
+                    render_plots_section(ui, entries);
+                }
+            });
         });
-    });
 }
 
 fn apply_mesh_rebuild(
@@ -1405,7 +1618,9 @@ fn apply_mesh_rebuild(
     }
     sim.pending_rebuild = false;
 
-    let Some(mesh) = meshes.get_mut(&sim.mesh_handle) else { return };
+    let Some(mesh) = meshes.get_mut(&sim.mesh_handle) else {
+        return;
+    };
 
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, render_data.positions.clone());
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, render_data.normals.clone());
@@ -1448,10 +1663,21 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
 
     if selected != current {
         params.shape = match selected {
-            1 => SurfaceShape::Torus { major: 32, minor: 16 },
-            2 => SurfaceShape::FlatGrid { width: 64, height: 64 },
-            3 => SurfaceShape::HamsterTunnel { num_spheres: 10, segments: 24 },
-            4 => SurfaceShape::ObjFile { path: String::new() },
+            1 => SurfaceShape::Torus {
+                major: 32,
+                minor: 16,
+            },
+            2 => SurfaceShape::FlatGrid {
+                width: 64,
+                height: 64,
+            },
+            3 => SurfaceShape::HamsterTunnel {
+                num_spheres: 10,
+                segments: 24,
+            },
+            4 => SurfaceShape::ObjFile {
+                path: String::new(),
+            },
             _ => SurfaceShape::Sphere { subdivisions: 4 },
         };
     }
@@ -1484,7 +1710,10 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
             *height = h as usize;
             ui.label(format!("Faces: {}", 2 * *width * *height));
         }
-        SurfaceShape::HamsterTunnel { num_spheres, segments } => {
+        SurfaceShape::HamsterTunnel {
+            num_spheres,
+            segments,
+        } => {
             let mut spheres = *num_spheres as u32;
             let mut segs = *segments as u32;
             ui.add(egui::Slider::new(&mut spheres, 3..=200).text("Spheres"));
@@ -1521,11 +1750,7 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
     });
 }
 
-fn render_viz_settings(
-    ui: &mut egui::Ui,
-    viz: &mut VizSettings,
-    commander: &SimCommander,
-) {
+fn render_viz_settings(ui: &mut egui::Ui, viz: &mut VizSettings, commander: &SimCommander) {
     egui::CollapsingHeader::new("Visualization")
         .default_open(true)
         .show(ui, |ui| {
@@ -1562,7 +1787,10 @@ fn render_controls_section(
     egui::CollapsingHeader::new("Playback")
         .default_open(true)
         .show(ui, |ui| {
-            ui.label(format!("Epoch: {} / {}", current_epoch, playback.max_epochs));
+            ui.label(format!(
+                "Epoch: {} / {}",
+                current_epoch, playback.max_epochs
+            ));
             ui.add_space(4.0);
 
             let label = if playback.playing { "Pause" } else { "Play" };
@@ -1593,30 +1821,26 @@ fn render_selected_cell(ui: &mut egui::Ui, selected: &SelectedCell) {
 
     egui::CollapsingHeader::new(header_text)
         .default_open(true)
-        .show(ui, |ui| {
-            match selected.cell_index {
-                None => {
-                    ui.label("Shift+click a triangle to inspect its program");
-                }
-                Some(_) => {
-                    match &selected.disassembly {
-                        None => {
-                            ui.spinner();
-                        }
-                        Some(disasm) => {
-                            egui::ScrollArea::vertical()
-                                .max_height(200.0)
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut disasm.as_str())
-                                            .font(egui::TextStyle::Monospace)
-                                            .desired_width(f32::INFINITY),
-                                    );
-                                });
-                        }
-                    }
-                }
+        .show(ui, |ui| match selected.cell_index {
+            None => {
+                ui.label("Shift+click a triangle to inspect its program");
             }
+            Some(_) => match &selected.disassembly {
+                None => {
+                    ui.spinner();
+                }
+                Some(disasm) => {
+                    egui::ScrollArea::vertical()
+                        .max_height(200.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut disasm.as_str())
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(f32::INFINITY),
+                            );
+                        });
+                }
+            },
         });
     ui.add_space(8.0);
 }
@@ -1684,26 +1908,31 @@ fn render_plots_section(ui: &mut egui::Ui, entries: &[EpochMetrics]) {
 
             ui.label("High-Order Entropy");
             let hoe_points = decimated_plot_points(entries, |e| [e.epoch as f64, e.hoe]);
-            Plot::new("hoe_plot")
-                .height(plot_height)
-                .show(ui, |plot_ui: &mut egui_plot::PlotUi| {
+            Plot::new("hoe_plot").height(plot_height).show(
+                ui,
+                |plot_ui: &mut egui_plot::PlotUi| {
                     plot_ui.line(Line::new(hoe_points).name("HOE"));
-                });
+                },
+            );
 
             ui.label("Unique Programs");
-            let unique_points = decimated_plot_points(entries, |e| [e.epoch as f64, e.unique_count as f64]);
-            Plot::new("unique_plot")
-                .height(plot_height)
-                .show(ui, |plot_ui: &mut egui_plot::PlotUi| {
+            let unique_points =
+                decimated_plot_points(entries, |e| [e.epoch as f64, e.unique_count as f64]);
+            Plot::new("unique_plot").height(plot_height).show(
+                ui,
+                |plot_ui: &mut egui_plot::PlotUi| {
                     plot_ui.line(Line::new(unique_points).name("Unique"));
-                });
+                },
+            );
 
             ui.label("Zero Byte Count");
-            let zero_points = decimated_plot_points(entries, |e| [e.epoch as f64, e.zero_count as f64]);
-            Plot::new("zero_plot")
-                .height(plot_height)
-                .show(ui, |plot_ui: &mut egui_plot::PlotUi| {
+            let zero_points =
+                decimated_plot_points(entries, |e| [e.epoch as f64, e.zero_count as f64]);
+            Plot::new("zero_plot").height(plot_height).show(
+                ui,
+                |plot_ui: &mut egui_plot::PlotUi| {
                     plot_ui.line(Line::new(zero_points).name("Zeros"));
-                });
+                },
+            );
         });
 }

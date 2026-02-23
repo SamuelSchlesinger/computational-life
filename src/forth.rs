@@ -234,25 +234,23 @@ impl Substrate for Forth {
         let mut out = String::new();
         for (addr, &b) in tape.iter().enumerate() {
             let desc = match b >> 6 {
-                0b00 => {
-                    match b {
-                        0x00 => "READ".to_string(),
-                        0x01 => "READ64".to_string(),
-                        0x02 => "WRITE".to_string(),
-                        0x03 => "WRITE64".to_string(),
-                        0x04 => "DUP".to_string(),
-                        0x05 => "POP".to_string(),
-                        0x06 => "SWAP".to_string(),
-                        0x07 => "SKIPNZ".to_string(),
-                        0x08 => "INC".to_string(),
-                        0x09 => "DEC".to_string(),
-                        0x0A => "ADD".to_string(),
-                        0x0B => "SUB".to_string(),
-                        0x0C => "COPY".to_string(),
-                        0x0D => "RCOPY".to_string(),
-                        _ => "NOP".to_string(),
-                    }
-                }
+                0b00 => match b {
+                    0x00 => "READ".to_string(),
+                    0x01 => "READ64".to_string(),
+                    0x02 => "WRITE".to_string(),
+                    0x03 => "WRITE64".to_string(),
+                    0x04 => "DUP".to_string(),
+                    0x05 => "POP".to_string(),
+                    0x06 => "SWAP".to_string(),
+                    0x07 => "SKIPNZ".to_string(),
+                    0x08 => "INC".to_string(),
+                    0x09 => "DEC".to_string(),
+                    0x0A => "ADD".to_string(),
+                    0x0B => "SUB".to_string(),
+                    0x0C => "COPY".to_string(),
+                    0x0D => "RCOPY".to_string(),
+                    _ => "NOP".to_string(),
+                },
                 0b01 => {
                     let val = b & 0x3F;
                     format!("PUSH {val}")
@@ -391,7 +389,9 @@ mod tests {
         // Build 255: push 63*4 + push 3 + ADD = 255. Then INC -> 0.
         // push 63, push 63, ADD(=126), push 63, ADD(=189), push 63, ADD(=252), push 3, ADD(=255), INC(=0), push 20, WRITE
         let mut tape = make_tape(
-            &[0x7F, 0x7F, 0x0A, 0x7F, 0x0A, 0x7F, 0x0A, 0x43, 0x0A, 0x08, 0x54, 0x02],
+            &[
+                0x7F, 0x7F, 0x0A, 0x7F, 0x0A, 0x7F, 0x0A, 0x43, 0x0A, 0x08, 0x54, 0x02,
+            ],
             128,
         );
         Forth::execute(&mut tape, 8192);
@@ -507,16 +507,16 @@ mod tests {
 
         let mut tape = make_tape(
             &[
-                0x43,       // [0] push 3
-                0x09,       // [1] DEC
-                0x04,       // [2] DUP
-                0x07,       // [3] SKIPNZ
-                0x82,       // [4] jump forward +3 -> pc 7
-                0x05,       // [5] POP
-                0xC5,       // [6] jump backward -6 -> pc 0... no, -([5]+1) = -6.
-                // Hmm, 0xC5 = 11_000101, bit6=1(backward), low6=5, offset=5+1=6. pc=6-6=0.
-                // But we want to jump to [1], so offset should be 5. low6=4. 0xC4.
-                // Let me fix:
+                0x43, // [0] push 3
+                0x09, // [1] DEC
+                0x04, // [2] DUP
+                0x07, // [3] SKIPNZ
+                0x82, // [4] jump forward +3 -> pc 7
+                0x05, // [5] POP
+                0xC5, // [6] jump backward -6 -> pc 0... no, -([5]+1) = -6.
+                      // Hmm, 0xC5 = 11_000101, bit6=1(backward), low6=5, offset=5+1=6. pc=6-6=0.
+                      // But we want to jump to [1], so offset should be 5. low6=4. 0xC4.
+                      // Let me fix:
             ],
             128,
         );

@@ -156,15 +156,51 @@ impl Substrate for Qop {
         while pc < tape.len() {
             let b = tape[pc];
             let desc = match b {
-                HALT => { let s = "HALT".to_string(); pc += 1; s }
-                PASS => { let s = "PASS".to_string(); pc += 1; s }
-                EAT => { let s = "EAT".to_string(); pc += 1; s }
-                SPIT => { let s = "SPIT".to_string(); pc += 1; s }
-                SKIP => { let s = "SKIP".to_string(); pc += 1; s }
-                GAP => { let s = "GAP".to_string(); pc += 1; s }
-                INC => { let s = "INC".to_string(); pc += 1; s }
-                DEC => { let s = "DEC".to_string(); pc += 1; s }
-                XOR => { let s = "XOR".to_string(); pc += 1; s }
+                HALT => {
+                    let s = "HALT".to_string();
+                    pc += 1;
+                    s
+                }
+                PASS => {
+                    let s = "PASS".to_string();
+                    pc += 1;
+                    s
+                }
+                EAT => {
+                    let s = "EAT".to_string();
+                    pc += 1;
+                    s
+                }
+                SPIT => {
+                    let s = "SPIT".to_string();
+                    pc += 1;
+                    s
+                }
+                SKIP => {
+                    let s = "SKIP".to_string();
+                    pc += 1;
+                    s
+                }
+                GAP => {
+                    let s = "GAP".to_string();
+                    pc += 1;
+                    s
+                }
+                INC => {
+                    let s = "INC".to_string();
+                    pc += 1;
+                    s
+                }
+                DEC => {
+                    let s = "DEC".to_string();
+                    pc += 1;
+                    s
+                }
+                XOR => {
+                    let s = "XOR".to_string();
+                    pc += 1;
+                    s
+                }
                 JMP_REL => {
                     if pc + 1 < tape.len() {
                         let offset = tape[pc + 1] as i8;
@@ -204,13 +240,42 @@ impl Substrate for Qop {
                         s
                     }
                 }
-                SET_HEAD => { let s = "SET_HEAD".to_string(); pc += 1; s }
-                SET_TAIL => { let s = "SET_TAIL".to_string(); pc += 1; s }
-                GET_HEAD => { let s = "GET_HEAD".to_string(); pc += 1; s }
-                GET_TAIL => { let s = "GET_TAIL".to_string(); pc += 1; s }
-                _ => { let s = "NOP".to_string(); pc += 1; s }
+                SET_HEAD => {
+                    let s = "SET_HEAD".to_string();
+                    pc += 1;
+                    s
+                }
+                SET_TAIL => {
+                    let s = "SET_TAIL".to_string();
+                    pc += 1;
+                    s
+                }
+                GET_HEAD => {
+                    let s = "GET_HEAD".to_string();
+                    pc += 1;
+                    s
+                }
+                GET_TAIL => {
+                    let s = "GET_TAIL".to_string();
+                    pc += 1;
+                    s
+                }
+                _ => {
+                    let s = "NOP".to_string();
+                    pc += 1;
+                    s
+                }
             };
-            let _ = writeln!(out, "{:04X}: {:02X}  {desc}", pc - if matches!(b, JMP_REL | JZ | JNZ) && pc >= 2 { 2 } else { 1 }, b);
+            let _ = writeln!(
+                out,
+                "{:04X}: {:02X}  {desc}",
+                pc - if matches!(b, JMP_REL | JZ | JNZ) && pc >= 2 {
+                    2
+                } else {
+                    1
+                },
+                b
+            );
         }
         out
     }
@@ -451,9 +516,17 @@ mod tests {
         Qop::execute(&mut tape, 8192);
 
         // First half should be copied to second half.
-        assert_eq!(&tape[64..67], &replicator, "replicator bytes should be copied");
+        assert_eq!(
+            &tape[64..67],
+            &replicator,
+            "replicator bytes should be copied"
+        );
         // Bytes 3..64 were 0 in the original, should be 0 in the copy.
-        assert_eq!(&tape[67..128], &vec![0u8; 61], "padding should be copied as zeros");
+        assert_eq!(
+            &tape[67..128],
+            &vec![0u8; 61],
+            "padding should be copied as zeros"
+        );
     }
 
     #[test]
@@ -484,7 +557,11 @@ mod tests {
 
         Qop::execute(&mut tape, 8192);
 
-        assert_eq!(&tape[64..128], &vec![PASS; 64], "64 PASS bytes should copy themselves");
+        assert_eq!(
+            &tape[64..128],
+            &vec![PASS; 64],
+            "64 PASS bytes should copy themselves"
+        );
     }
 }
 

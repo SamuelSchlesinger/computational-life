@@ -70,7 +70,7 @@ intuitions about what's happening.
 
 ## Features
 
-- **Eight instruction sets** spanning fundamentally different computational paradigms:
+- **Nine instruction sets** spanning fundamentally different computational paradigms:
 
   | Substrate | Model | Replicator | Origin |
   |-----------|-------|--------:|--------|
@@ -82,6 +82,7 @@ intuitions about what's happening.
   | **Skim** | Skip-chain (data = control flow) | 64 bytes | Novel |
   | **Rig** | Register-indirect (Von Neumann) | 4 bytes | Novel |
   | **Bits** | Bit-serial (sub-byte granularity) | 4 bytes | Novel |
+  | **Echo** | Delay-line memory (write = read + delay) | 3 bytes | Novel |
 
 - **Multiple topologies**: flat grid, icosphere, torus, and hamster tunnel —
   all with geodesic neighborhoods

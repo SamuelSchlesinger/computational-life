@@ -129,7 +129,10 @@ impl Substrate for Bff {
     }
 
     fn is_instruction(byte: u8) -> bool {
-        matches!(byte, LESS | GREATER | LBRACE | RBRACE | MINUS | PLUS | DOT | COMMA | LBRACKET | RBRACKET)
+        matches!(
+            byte,
+            LESS | GREATER | LBRACE | RBRACE | MINUS | PLUS | DOT | COMMA | LBRACKET | RBRACKET
+        )
     }
 
     fn disassemble(tape: &[u8]) -> String {
