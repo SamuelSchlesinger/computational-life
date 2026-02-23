@@ -1456,7 +1456,7 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
     match &mut params.shape {
         SurfaceShape::Sphere { subdivisions } => {
             let mut sub = *subdivisions as u32;
-            ui.add(egui::Slider::new(&mut sub, 0..=6).text("Subdivisions"));
+            ui.add(egui::Slider::new(&mut sub, 0..=8).text("Subdivisions"));
             *subdivisions = sub as usize;
             let face_count = 20 * 4usize.pow(sub);
             ui.label(format!("Faces: {face_count}"));
@@ -1464,8 +1464,8 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
         SurfaceShape::Torus { major, minor } => {
             let mut maj = *major as u32;
             let mut min = *minor as u32;
-            ui.add(egui::Slider::new(&mut maj, 3..=128).text("Major segments"));
-            ui.add(egui::Slider::new(&mut min, 3..=64).text("Minor segments"));
+            ui.add(egui::Slider::new(&mut maj, 3..=512).text("Major segments"));
+            ui.add(egui::Slider::new(&mut min, 3..=256).text("Minor segments"));
             *major = maj as usize;
             *minor = min as usize;
             ui.label(format!("Faces: {}", 2 * *major * *minor));
@@ -1473,8 +1473,8 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
         SurfaceShape::FlatGrid { width, height } => {
             let mut w = *width as u32;
             let mut h = *height as u32;
-            ui.add(egui::Slider::new(&mut w, 1..=256).text("Width"));
-            ui.add(egui::Slider::new(&mut h, 1..=256).text("Height"));
+            ui.add(egui::Slider::new(&mut w, 1..=1024).text("Width"));
+            ui.add(egui::Slider::new(&mut h, 1..=1024).text("Height"));
             *width = w as usize;
             *height = h as usize;
             ui.label(format!("Faces: {}", 2 * *width * *height));
@@ -1482,8 +1482,8 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
         SurfaceShape::HamsterTunnel { num_spheres, segments } => {
             let mut spheres = *num_spheres as u32;
             let mut segs = *segments as u32;
-            ui.add(egui::Slider::new(&mut spheres, 3..=50).text("Spheres"));
-            ui.add(egui::Slider::new(&mut segs, 3..=48).text("Segments"));
+            ui.add(egui::Slider::new(&mut spheres, 3..=200).text("Spheres"));
+            ui.add(egui::Slider::new(&mut segs, 3..=192).text("Segments"));
             *num_spheres = spheres as usize;
             *segments = segs as usize;
             let rings_per_seg = 16usize;
