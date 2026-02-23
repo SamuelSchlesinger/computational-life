@@ -83,8 +83,8 @@ intuitions about what's happening.
   | **Rig** | Register-indirect (Von Neumann) | 4 bytes | Novel |
   | **Bits** | Bit-serial (sub-byte granularity) | 4 bytes | Novel |
 
-- **Multiple topologies**: flat grid, icosphere, torus, hamster tunnel, and
-  arbitrary `.obj` import — all with geodesic neighborhoods
+- **Multiple topologies**: flat grid, icosphere, torus, and hamster tunnel —
+  all with geodesic neighborhoods
 - **Live 3D visualization** via Bevy with real-time metrics (high-order entropy,
   unique program count, zero-byte count) and multiple color modes
 - **Deterministic** — seeded RNG for full reproducibility
