@@ -22,6 +22,7 @@ use crate::skim::Skim;
 use crate::subleq::{Rsubleq4, Subleq};
 use crate::substrate::Substrate;
 use crate::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh, SurfaceSpec, face_normal};
+use crate::z80::{I8080, Z80};
 
 const MAX_PLOT_POINTS: usize = 1000;
 
@@ -36,6 +37,7 @@ enum AppState {
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
+/// Which computational substrate (instruction set) to simulate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubstrateKind {
     Bff,
@@ -47,10 +49,12 @@ pub enum SubstrateKind {
     Rig,
     Bits,
     Echo,
+    Z80,
+    I8080,
 }
 
 impl SubstrateKind {
-    const ALL: [SubstrateKind; 9] = [
+    const ALL: [SubstrateKind; 11] = [
         SubstrateKind::Bff,
         SubstrateKind::Forth,
         SubstrateKind::Subleq,
@@ -60,6 +64,8 @@ impl SubstrateKind {
         SubstrateKind::Rig,
         SubstrateKind::Bits,
         SubstrateKind::Echo,
+        SubstrateKind::Z80,
+        SubstrateKind::I8080,
     ];
 
     fn label(self) -> &'static str {
@@ -73,6 +79,26 @@ impl SubstrateKind {
             SubstrateKind::Rig => "Rig",
             SubstrateKind::Bits => "Bits",
             SubstrateKind::Echo => "Echo",
+            SubstrateKind::Z80 => "Z80",
+            SubstrateKind::I8080 => "8080",
+        }
+    }
+
+    /// Paper-recommended program size for this substrate.
+    fn default_program_size(self) -> usize {
+        match self {
+            // Section 3.3: Z80/8080 use 16-byte programs.
+            SubstrateKind::Z80 | SubstrateKind::I8080 => 16,
+            _ => 64,
+        }
+    }
+
+    /// Paper-recommended step limit for this substrate.
+    fn default_step_limit(self) -> usize {
+        match self {
+            // Section 3.3: Z80/8080 use 256 steps.
+            SubstrateKind::Z80 | SubstrateKind::I8080 => 256,
+            _ => 1 << 13,
         }
     }
 }
@@ -238,6 +264,7 @@ impl Default for MenuConfig {
 }
 
 impl MenuConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         substrate: SubstrateKind,
         spec: &SurfaceSpec,
@@ -595,9 +622,8 @@ fn blur_surface_colors(
     let num_faces = face_adjacency.len();
     scratch.resize(num_faces * 4, 0);
 
-    for i in 0..num_faces {
+    for (i, adj) in face_adjacency.iter().enumerate().take(num_faces) {
         let idx = i * 4;
-        let adj = &face_adjacency[i];
         let count = adj.len() as f32;
 
         if count == 0.0 {
@@ -809,6 +835,40 @@ fn spawn_sim_thread(
                 );
             });
         }
+        SubstrateKind::Z80 => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Z80>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::I8080 => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<I8080>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
     }
 
     (metrics_rx, snap_rx, cmd_tx, prog_rx)
@@ -816,6 +876,7 @@ fn spawn_sim_thread(
 
 // ─── Surface sim thread ─────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn sim_thread_loop_surface<S: Substrate + Sync>(
     mesh: SurfaceMesh,
     config: SoupSurfaceConfig,
@@ -933,13 +994,12 @@ fn sim_thread_loop_surface<S: Substrate + Sync>(
             last_snap_send = now;
         }
 
-        if epoch % metrics_interval == 0 || epoch == max_epochs {
-            if metrics_tx
+        if (epoch.is_multiple_of(metrics_interval) || epoch == max_epochs)
+            && metrics_tx
                 .send(compute_metrics_surface(&soup, epoch, &mut pop_buf))
                 .is_err()
-            {
-                break;
-            }
+        {
+            break;
         }
     }
 }
@@ -1086,6 +1146,7 @@ fn render_menu_ui(
             // Substrate selector.
             ui.heading("Substrate");
             ui.add_space(4.0);
+            let prev_substrate = menu.substrate;
             egui::ComboBox::from_label("Substrate")
                 .selected_text(menu.substrate.label())
                 .show_ui(ui, |ui| {
@@ -1093,6 +1154,10 @@ fn render_menu_ui(
                         ui.selectable_value(&mut menu.substrate, kind, kind.label());
                     }
                 });
+            if menu.substrate != prev_substrate {
+                menu.program_size = menu.substrate.default_program_size();
+                menu.step_limit = menu.substrate.default_step_limit();
+            }
             ui.add_space(12.0);
 
             // Surface parameters (shared helper).
@@ -1428,7 +1493,7 @@ fn orbit_camera_system(
 
     // Also check if the cursor is in the right side-panel region, which
     // trackpad two-finger scrolls may not register as "pointer over area".
-    let cursor_over_panel = windows.single().cursor_position().map_or(false, |pos| {
+    let cursor_over_panel = windows.single().cursor_position().is_some_and(|pos| {
         let window_width = windows.single().width();
         // The side panel is 350px min-width on the right side.
         pos.x > window_width - 360.0
@@ -1481,6 +1546,7 @@ fn orbit_camera_system(
     transform.look_at(orbit.focus, Vec3::Y);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_mesh_click(
     mut contexts: EguiContexts,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -1516,13 +1582,13 @@ fn handle_mesh_click(
     let settings = RayCastSettings::default().always_early_exit();
     let hits = ray_cast.cast_ray(ray, &settings);
 
-    if let Some((_entity, hit)) = hits.first() {
-        if let Some(tri_idx) = hit.triangle_index {
-            selected.cell_index = Some(tri_idx);
-            selected.program_bytes = None;
-            selected.disassembly = None;
-            let _ = commander.0.send(SimCommand::RequestProgram(tri_idx));
-        }
+    if let Some((_entity, hit)) = hits.first()
+        && let Some(tri_idx) = hit.triangle_index
+    {
+        selected.cell_index = Some(tri_idx);
+        selected.program_bytes = None;
+        selected.disassembly = None;
+        let _ = commander.0.send(SimCommand::RequestProgram(tri_idx));
     }
 }
 
@@ -1539,6 +1605,7 @@ fn drain_program_response(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_ui_surface(
     mut contexts: EguiContexts,
     history: ResMut<SimulationHistory>,
@@ -1742,10 +1809,10 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
     let mut seed_str = params.seed.to_string();
     ui.horizontal(|ui| {
         ui.label("Seed:");
-        if ui.text_edit_singleline(&mut seed_str).changed() {
-            if let Ok(s) = seed_str.parse::<u64>() {
-                params.seed = s;
-            }
+        if ui.text_edit_singleline(&mut seed_str).changed()
+            && let Ok(s) = seed_str.parse::<u64>()
+        {
+            params.seed = s;
         }
     });
 }

@@ -70,8 +70,8 @@ impl Substrate for Subleq {
             pc += 3;
         }
         // Trailing bytes that don't form a complete triplet.
-        for i in pc..tape.len() {
-            let _ = writeln!(out, "{i:04X}: {:02X}     (trailing)", tape[i]);
+        for (i, &byte) in tape.iter().enumerate().skip(pc) {
+            let _ = writeln!(out, "{i:04X}: {byte:02X}     (trailing)");
         }
         out
     }
@@ -111,8 +111,8 @@ impl Substrate for Rsubleq4 {
             );
             pc += 4;
         }
-        for i in pc..tape.len() {
-            let _ = writeln!(out, "{i:04X}: {:02X}     (trailing)", tape[i]);
+        for (i, &byte) in tape.iter().enumerate().skip(pc) {
+            let _ = writeln!(out, "{i:04X}: {byte:02X}     (trailing)");
         }
         out
     }

@@ -226,8 +226,8 @@ mod tests {
     fn test_plus_wraps_at_255() {
         let mut tape = vec![0u8; 256];
         // Move head0 to 5 with five ">"
-        for i in 0..5 {
-            tape[i] = b'>';
+        for byte in tape.iter_mut().take(5) {
+            *byte = b'>';
         }
         // tape[5] = 0xFF (no-op), tape[6] = 0 (no-op)
         // At IP=5, tape[5]=0xFF is a no-op. IP=6. head0=5.
@@ -279,8 +279,8 @@ mod tests {
     fn test_simple_loop() {
         // Move head0 to 128, set tape[128]=3, then run [>+<-] to copy to tape[129].
         let mut tape = vec![0u8; 256];
-        for i in 0..128 {
-            tape[i] = b'>'; // head0 goes to 128
+        for byte in tape.iter_mut().take(128) {
+            *byte = b'>'; // head0 goes to 128
         }
         tape[128] = 3;
         tape[198] = b'[';
@@ -369,8 +369,8 @@ mod tests {
         // after the tape is modified by the loop body itself.
         let mut tape = vec![0u8; 128];
         // Move head0 to 64 (a data area well away from the program).
-        for i in 0..10 {
-            tape[i] = b'>';
+        for byte in tape.iter_mut().take(10) {
+            *byte = b'>';
         }
         // tape[10] is a no-op (0), IP advances to 11. head0=10.
         // Set up: tape[10] = 3 (loop counter, non-zero, not an instruction).

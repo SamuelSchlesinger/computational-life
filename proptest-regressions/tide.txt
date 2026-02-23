@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a45e55f31c1d14ddc4626253f99052e951a40e454cc8fb5f9ac793988b3272ba # shrinks to tape_data = [89, 64, 9, 41]

@@ -1510,6 +1510,7 @@ dependencies = [
  "bevy_egui",
  "brotli",
  "egui_plot",
+ "iz80",
  "proptest",
  "rand 0.8.5",
  "rayon",
@@ -2606,6 +2607,12 @@ name = "itoa"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
+
+[[package]]
+name = "iz80"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbbaa28ccb42e344cc845d267f4ed6fb25edaf547b9d8e4c53244fcdc01081f7"
 
 [[package]]
 name = "jni"

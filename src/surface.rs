@@ -1191,7 +1191,7 @@ f 4 1 5 8
     #[test]
     fn test_hamster_tunnel_min_params() {
         let mesh = SurfaceMesh::hamster_tunnel(3, 3, 0).unwrap();
-        assert!(mesh.faces.len() > 0);
+        assert!(!mesh.faces.is_empty());
     }
 
     #[test]

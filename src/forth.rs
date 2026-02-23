@@ -211,7 +211,7 @@ impl Substrate for Forth {
                         if offset > pc {
                             break; // would jump before start
                         }
-                        pc = pc - offset;
+                        pc -= offset;
                     }
                     continue; // don't do pc += 1 below
                 }

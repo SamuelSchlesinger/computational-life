@@ -34,8 +34,6 @@ neighborhoods. There is no well-mixed 0D mode.
 
 ## Features not implemented
 
-- **Z80 / Intel 8080 emulation:** The paper explores self-replicators on real
-  CPU instruction sets. Not implemented here.
 - **Long tape simulations:** A single shared 65,536-byte tape with multiple
   execution threads. Not implemented here.
 - **Tracer tokens:** 64-bit (epoch, position, char) tokens attached to every

@@ -10,3 +10,4 @@ pub mod subleq;
 pub mod substrate;
 pub mod surface;
 pub mod viz;
+pub mod z80;

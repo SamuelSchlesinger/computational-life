@@ -70,7 +70,7 @@ intuitions about what's happening.
 
 ## Features
 
-- **Nine instruction sets** spanning fundamentally different computational paradigms:
+- **Eleven instruction sets** spanning fundamentally different computational paradigms:
 
   | Substrate | Model | Replicator | Origin |
   |-----------|-------|--------:|--------|
@@ -78,6 +78,8 @@ intuitions about what's happening.
   | Forth | Stack machine with relative jumps | 1 byte | Paper |
   | SUBLEQ | Single-instruction, absolute addressing | 60 bytes | Paper |
   | RSUBLEQ4 | Single-instruction, relative addressing | 25 bytes | Paper |
+  | Z80 | Zilog Z80 (real CPU) | 16 bytes | Paper |
+  | 8080 | Intel 8080 (real CPU) | 2 bytes | Paper |
   | **Qop** | Queue / FIFO pipeline | 3 bytes | Novel |
   | **Skim** | Skip-chain (data = control flow) | 64 bytes | Novel |
   | **Rig** | Register-indirect (Von Neumann) | 4 bytes | Novel |

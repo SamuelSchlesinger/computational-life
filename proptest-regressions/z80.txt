@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 195f1fbf2086fbeeba72f100b3a1506efc306a42717f747c4ec303f751c9b48b # shrinks to tape_data = [17, 0, 0, 43, 51, 237, 170]
+cc b2fe7a020756453adea8f4eeb3a96ce8dc62c3abf055763b9abdb02caa2592f2 # shrinks to tape_data = [2, 25, 5, 4, 4, 15, 2, 0, 239, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 237, 170, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 99, 106, 0, 239, 44, 104, 7, 134, 99, 74, 71, 109, 216, 206, 187, 224, 46, 192, 12, 216, 209, 95, 50, 100, 227, 211, 156, 201, 15, 16, 122, 29, 181, 18, 242, 159, 58, 205, 189]
