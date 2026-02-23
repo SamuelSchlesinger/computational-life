@@ -12,18 +12,24 @@ use egui_plot::{Line, Plot, PlotPoints};
 use crate::bff::Bff;
 use crate::bits::Bits;
 use crate::echo::Echo;
+use crate::edsac::Edsac;
+use crate::edvac::Edvac;
 use crate::forth::Forth;
+use crate::ias::Ias;
 use crate::metrics::{
     byte_frequency_histogram, high_order_entropy, unique_program_count, zero_byte_count,
 };
 use crate::mos6502::Mos6502;
+use crate::pdp1::Pdp1;
 use crate::qop::Qop;
 use crate::rig::Rig;
 use crate::skim::Skim;
+use crate::ssem::Ssem;
 use crate::subleq::{Rsubleq4, Subleq};
 use crate::substrate::Substrate;
 use crate::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh, SurfaceSpec, face_normal};
 use crate::uxn::Uxn;
+use crate::z3::Z3;
 use crate::z80::{I8080, Z80};
 
 const MAX_PLOT_POINTS: usize = 1000;
@@ -55,10 +61,16 @@ pub enum SubstrateKind {
     I8080,
     Uxn,
     Mos6502,
+    Ssem,
+    Edsac,
+    Ias,
+    Pdp1,
+    Z3,
+    Edvac,
 }
 
 impl SubstrateKind {
-    const ALL: [SubstrateKind; 13] = [
+    const ALL: [SubstrateKind; 19] = [
         SubstrateKind::Bff,
         SubstrateKind::Forth,
         SubstrateKind::Subleq,
@@ -72,6 +84,12 @@ impl SubstrateKind {
         SubstrateKind::I8080,
         SubstrateKind::Uxn,
         SubstrateKind::Mos6502,
+        SubstrateKind::Ssem,
+        SubstrateKind::Edsac,
+        SubstrateKind::Ias,
+        SubstrateKind::Pdp1,
+        SubstrateKind::Z3,
+        SubstrateKind::Edvac,
     ];
 
     fn label(self) -> &'static str {
@@ -89,6 +107,12 @@ impl SubstrateKind {
             SubstrateKind::I8080 => "8080",
             SubstrateKind::Uxn => "Uxn",
             SubstrateKind::Mos6502 => "6502",
+            SubstrateKind::Ssem => "SSEM",
+            SubstrateKind::Edsac => "EDSAC",
+            SubstrateKind::Ias => "IAS",
+            SubstrateKind::Pdp1 => "PDP-1",
+            SubstrateKind::Z3 => "Z3",
+            SubstrateKind::Edvac => "EDVAC",
         }
     }
 
@@ -97,6 +121,10 @@ impl SubstrateKind {
         match self {
             // Section 3.3: Z80/8080 use 16-byte programs.
             SubstrateKind::Z80 | SubstrateKind::I8080 => 16,
+            // SSEM uses 4-byte words, needs at least a few words.
+            SubstrateKind::Ssem => 64,
+            // EDVAC uses 5-byte instructions — 60 bytes gives 12 instructions.
+            SubstrateKind::Edvac => 60,
             _ => 64,
         }
     }
@@ -897,6 +925,108 @@ fn spawn_sim_thread(
         SubstrateKind::Mos6502 => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Mos6502>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Ssem => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Ssem>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Edsac => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Edsac>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Ias => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Ias>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Pdp1 => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Pdp1>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Z3 => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Z3>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Edvac => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Edvac>(
                     mesh,
                     config,
                     seed,
