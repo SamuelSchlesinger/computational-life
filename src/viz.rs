@@ -16,6 +16,7 @@ use crate::substrate::Substrate;
 use crate::subleq::{Subleq, Rsubleq4};
 use crate::qop::Qop;
 use crate::skim::Skim;
+use crate::rig::Rig;
 use crate::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh, SurfaceSpec, face_normal};
 
 const MAX_PLOT_POINTS: usize = 1000;
@@ -39,16 +40,18 @@ pub enum SubstrateKind {
     Rsubleq4,
     Qop,
     Skim,
+    Rig,
 }
 
 impl SubstrateKind {
-    const ALL: [SubstrateKind; 6] = [
+    const ALL: [SubstrateKind; 7] = [
         SubstrateKind::Bff,
         SubstrateKind::Forth,
         SubstrateKind::Subleq,
         SubstrateKind::Rsubleq4,
         SubstrateKind::Qop,
         SubstrateKind::Skim,
+        SubstrateKind::Rig,
     ];
 
     fn label(self) -> &'static str {
@@ -59,6 +62,7 @@ impl SubstrateKind {
             SubstrateKind::Rsubleq4 => "RSUBLEQ4",
             SubstrateKind::Qop => "Qop",
             SubstrateKind::Skim => "Skim",
+            SubstrateKind::Rig => "Rig",
         }
     }
 }
@@ -644,6 +648,14 @@ fn spawn_sim_thread(
         SubstrateKind::Skim => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<Skim>(
+                    mesh, config, seed, max_epochs, metrics_interval,
+                    metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Rig => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Rig>(
                     mesh, config, seed, max_epochs, metrics_interval,
                     metrics_tx, snap_tx, cmd_rx, face_adjacency, blur, prog_tx,
                 );
