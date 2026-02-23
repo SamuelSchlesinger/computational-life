@@ -3,6 +3,7 @@ pub mod bff;
 pub mod forth;
 pub mod subleq;
 pub mod qop;
+pub mod skim;
 pub mod surface;
 pub mod metrics;
 pub mod viz;
