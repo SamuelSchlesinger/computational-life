@@ -16,12 +16,14 @@ use crate::forth::Forth;
 use crate::metrics::{
     byte_frequency_histogram, high_order_entropy, unique_program_count, zero_byte_count,
 };
+use crate::mos6502::Mos6502;
 use crate::qop::Qop;
 use crate::rig::Rig;
 use crate::skim::Skim;
 use crate::subleq::{Rsubleq4, Subleq};
 use crate::substrate::Substrate;
 use crate::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh, SurfaceSpec, face_normal};
+use crate::uxn::Uxn;
 use crate::z80::{I8080, Z80};
 
 const MAX_PLOT_POINTS: usize = 1000;
@@ -51,10 +53,12 @@ pub enum SubstrateKind {
     Echo,
     Z80,
     I8080,
+    Uxn,
+    Mos6502,
 }
 
 impl SubstrateKind {
-    const ALL: [SubstrateKind; 11] = [
+    const ALL: [SubstrateKind; 13] = [
         SubstrateKind::Bff,
         SubstrateKind::Forth,
         SubstrateKind::Subleq,
@@ -66,6 +70,8 @@ impl SubstrateKind {
         SubstrateKind::Echo,
         SubstrateKind::Z80,
         SubstrateKind::I8080,
+        SubstrateKind::Uxn,
+        SubstrateKind::Mos6502,
     ];
 
     fn label(self) -> &'static str {
@@ -81,6 +87,8 @@ impl SubstrateKind {
             SubstrateKind::Echo => "Echo",
             SubstrateKind::Z80 => "Z80",
             SubstrateKind::I8080 => "8080",
+            SubstrateKind::Uxn => "Uxn",
+            SubstrateKind::Mos6502 => "6502",
         }
     }
 
@@ -855,6 +863,40 @@ fn spawn_sim_thread(
         SubstrateKind::I8080 => {
             thread::spawn(move || {
                 sim_thread_loop_surface::<I8080>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Uxn => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Uxn>(
+                    mesh,
+                    config,
+                    seed,
+                    max_epochs,
+                    metrics_interval,
+                    metrics_tx,
+                    snap_tx,
+                    cmd_rx,
+                    face_adjacency,
+                    blur,
+                    prog_tx,
+                );
+            });
+        }
+        SubstrateKind::Mos6502 => {
+            thread::spawn(move || {
+                sim_thread_loop_surface::<Mos6502>(
                     mesh,
                     config,
                     seed,

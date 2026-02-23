@@ -70,7 +70,7 @@ intuitions about what's happening.
 
 ## Features
 
-- **Eleven instruction sets** spanning fundamentally different computational paradigms:
+- **Thirteen instruction sets** spanning fundamentally different computational paradigms:
 
   | Substrate | Model | Replicator | Origin |
   |-----------|-------|--------:|--------|
@@ -85,6 +85,8 @@ intuitions about what's happening.
   | **Rig** | Register-indirect (Von Neumann) | 4 bytes | Novel |
   | **Bits** | Bit-serial (sub-byte granularity) | 4 bytes | Novel |
   | **Echo** | Delay-line memory (write = read + delay) | 3 bytes | Novel |
+  | **Uxn** | Stack machine (dual circular stacks) | ? bytes | Novel |
+  | **6502** | MOS 6502 (real CPU, NMOS variant) | ? bytes | Novel |
 
 - **Multiple topologies**: flat grid, icosphere, torus, and hamster tunnel —
   all with geodesic neighborhoods
