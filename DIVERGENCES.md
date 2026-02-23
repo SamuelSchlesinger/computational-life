@@ -52,3 +52,16 @@ neighborhoods. There is no well-mixed 0D mode.
 - **Geometric-skip mutation sampling** (~240× speedup over naive per-byte
   iteration).
 - **Deterministic seeded RNG** for full reproducibility.
+- **Four novel computational substrates** not present in the paper, each
+  exploring a fundamentally different computational paradigm:
+
+  | Substrate | Model | Smallest replicator | Key novelty |
+  |-----------|-------|--------------------:|-------------|
+  | **Qop** | Queue machine | 3 bytes | FIFO data flow — read/write heads advance one-directionally; no random access without explicit pointer reset. Programs must process data in pipeline order. |
+  | **Skim** | Skip-chain machine | 64 bytes | No sequential PC — every byte's low nibble determines the next instruction's address. Data IS control flow; even NOP bytes redirect execution. |
+  | **Rig** | Register-indirect machine | 4 bytes | Classical Von Neumann architecture with 4 named registers and register-indirect addressing. r[1] starts at tape midpoint for natural half-to-half replication. |
+  | **Bits** | Bit-serial machine | 4 bytes | Operates on individual bits, not bytes — bit read/write pointers, a 1-bit carry register, and bitwise logic. 8× finer granularity than all other substrates. |
+
+  These complement the paper's substrates (BFF, Forth, SUBLEQ, RSUBLEQ4)
+  and provide a broader landscape for studying how computational model
+  properties affect replicator emergence, size, and dynamics.

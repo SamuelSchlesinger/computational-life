@@ -70,12 +70,23 @@ intuitions about what's happening.
 
 ## Features
 
-- **Two instruction sets**: BFF (Brainfuck-family with dual read/write heads)
-  and Forth (stack-based with push literals and relative jumps)
-- **Multiple topologies**: 0D (well-mixed), 2D flat grid, and arbitrary 3D
-  surfaces (icosphere, torus, flat mesh, `.obj` import)
-- **Live visualization** via Bevy with real-time metrics (high-order entropy,
-  unique program count, zero-byte count)
+- **Eight instruction sets** spanning fundamentally different computational paradigms:
+
+  | Substrate | Model | Replicator | Origin |
+  |-----------|-------|--------:|--------|
+  | BFF | Pointer machine with bracket loops | ~5 bytes | Paper |
+  | Forth | Stack machine with relative jumps | 1 byte | Paper |
+  | SUBLEQ | Single-instruction, absolute addressing | 60 bytes | Paper |
+  | RSUBLEQ4 | Single-instruction, relative addressing | 25 bytes | Paper |
+  | **Qop** | Queue / FIFO pipeline | 3 bytes | Novel |
+  | **Skim** | Skip-chain (data = control flow) | 64 bytes | Novel |
+  | **Rig** | Register-indirect (Von Neumann) | 4 bytes | Novel |
+  | **Bits** | Bit-serial (sub-byte granularity) | 4 bytes | Novel |
+
+- **Multiple topologies**: flat grid, icosphere, torus, hamster tunnel, and
+  arbitrary `.obj` import — all with geodesic neighborhoods
+- **Live 3D visualization** via Bevy with real-time metrics (high-order entropy,
+  unique program count, zero-byte count) and multiple color modes
 - **Deterministic** — seeded RNG for full reproducibility
 - **Fast** — geometric-skip mutation, parallel surface epochs via Rayon
 
@@ -111,7 +122,7 @@ cargo run --release -- --seed 1 --epochs 1000 --benchmark
 | `--program-size` | 64 | Bytes per program |
 | `--step-limit` | 8192 | Max interpreter steps per interaction |
 | `--mutation-rate` | 0.00024 | Per-byte mutation probability per epoch |
-| `--substrate` | `bff` | Instruction set (`bff` or `forth`) |
+| `--substrate` | `bff` | Instruction set (`bff`, `forth`, `subleq`, `rsubleq4`, `qop`, `skim`, `rig`, `bits`) |
 | `--surface` | *none* | Surface spec: `flat:WxH`, `sphere:N`, `torus:MxN`, `obj:PATH` |
 | `--live` | off | Launch Bevy visualization window (requires `--features viz`) |
 | `--blur` | 0.0 | Spatial blur strength for the live viewer |
