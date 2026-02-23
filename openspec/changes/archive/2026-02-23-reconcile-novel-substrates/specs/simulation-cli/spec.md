@@ -1,8 +1,5 @@
-# simulation-cli Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-core-engine-and-bff. Update Purpose after archive.
-## Requirements
 ### Requirement: CLI Configuration
 
 The system SHALL provide a graphical menu interface that allows the user to configure simulation parameters before starting. The menu SHALL accept the following settings:
@@ -31,13 +28,3 @@ A "Start Simulation" button SHALL launch the simulation with the configured para
 #### Scenario: Novel substrate selection
 - **WHEN** the user selects Qop, Skim, Rig, or Bits from the substrate dropdown
 - **THEN** the simulation SHALL run using the selected novel substrate
-
-### Requirement: CLI Progress Reporting
-
-The system SHALL display simulation progress in the sidebar during active simulation. The current epoch number SHALL be shown alongside the play/pause controls. Metrics plots (HOE, unique program count, zero byte count) SHALL update live at each metrics interval to indicate ongoing progress.
-
-#### Scenario: Progress display
-- **WHEN** a simulation is running
-- **THEN** the sidebar SHALL show the current epoch number
-- **AND** metrics plots SHALL update at the configured metrics interval
-
