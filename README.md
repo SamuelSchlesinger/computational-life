@@ -93,40 +93,12 @@ intuitions about what's happening.
 ## Quick start
 
 ```bash
-# Headless run (CSV to stdout)
-cargo run --release -- --seed 42 --epochs 10000
-
-# 2D spatial simulation with live viewer
-cargo run --release --features viz -- --seed 42 --epochs 100000 \
-  --surface flat:240x135 --live
-
-# 3D surface on an icosphere
-cargo run --release --features viz -- --seed 42 --epochs 10000 \
-  --surface sphere:5 --live
-
-# Torus surface
-cargo run --release --features viz -- --seed 42 --epochs 10000 \
-  --surface torus:80x80 --live
-
-# Benchmark throughput
-cargo run --release -- --seed 1 --epochs 1000 --benchmark
+cargo run --release
 ```
 
-## CLI options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--seed` | *required* | RNG seed for reproducibility |
-| `--epochs` | *required* | Number of epochs to simulate |
-| `--population-size` | 131072 | Program count (0D mode only) |
-| `--program-size` | 64 | Bytes per program |
-| `--step-limit` | 8192 | Max interpreter steps per interaction |
-| `--mutation-rate` | 0.00024 | Per-byte mutation probability per epoch |
-| `--substrate` | `bff` | Instruction set (`bff`, `forth`, `subleq`, `rsubleq4`, `qop`, `skim`, `rig`, `bits`) |
-| `--surface` | *none* | Surface spec: `flat:WxH`, `sphere:N`, `torus:MxN`, `obj:PATH` |
-| `--live` | off | Launch Bevy visualization window (requires `--features viz`) |
-| `--blur` | 0.0 | Spatial blur strength for the live viewer |
-| `--benchmark` | off | Print throughput stats instead of CSV |
+This launches the interactive viewer where you can configure the substrate,
+surface topology, mutation rate, and all other parameters from the menu before
+starting the simulation.
 
 ## How it works
 
