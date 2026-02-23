@@ -572,6 +572,7 @@ pub enum SurfaceSpec {
     Torus { major: usize, minor: usize },
     FlatGrid { width: usize, height: usize },
     HamsterTunnel { num_spheres: usize, segments: usize, seed: u64 },
+    ObjFile { path: String },
 }
 
 impl SurfaceSpec {
@@ -584,6 +585,7 @@ impl SurfaceSpec {
             SurfaceSpec::HamsterTunnel { num_spheres, segments, seed } => {
                 SurfaceMesh::hamster_tunnel(*num_spheres, *segments, *seed)
             }
+            SurfaceSpec::ObjFile { path } => SurfaceMesh::from_obj(path),
         }
     }
 
@@ -594,6 +596,7 @@ impl SurfaceSpec {
             SurfaceSpec::Torus { .. } => "Torus",
             SurfaceSpec::FlatGrid { .. } => "Flat Grid",
             SurfaceSpec::HamsterTunnel { .. } => "Hamster Tunnel",
+            SurfaceSpec::ObjFile { .. } => "OBJ File",
         }
     }
 }
@@ -1147,5 +1150,41 @@ f 4 1 5 8
         let m2 = SurfaceMesh::hamster_tunnel(6, 12, 42).unwrap();
         assert_eq!(m1.vertices, m2.vertices);
         assert_eq!(m1.faces, m2.faces);
+    }
+
+    #[test]
+    fn test_example_obj_files() {
+        let examples_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/obj");
+        let cases = [
+            ("tetrahedron.obj", 4, 4),
+            ("cube.obj", 8, 12),
+            ("octahedron.obj", 6, 8),
+            ("icosahedron.obj", 12, 20),
+            ("torus.obj", 96, 192),
+        ];
+        for (file, expected_verts, expected_faces) in cases {
+            let path = format!("{examples_dir}/{file}");
+            let mesh = SurfaceMesh::from_obj(&path)
+                .unwrap_or_else(|e| panic!("{file}: {e}"));
+            assert_eq!(
+                mesh.vertices.len(), expected_verts,
+                "{file}: expected {expected_verts} vertices, got {}",
+                mesh.vertices.len()
+            );
+            assert_eq!(
+                mesh.faces.len(), expected_faces,
+                "{file}: expected {expected_faces} faces, got {}",
+                mesh.faces.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_obj_spec_builds() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/obj/icosahedron.obj");
+        let spec = SurfaceSpec::ObjFile { path: path.to_string() };
+        assert_eq!(spec.label(), "OBJ File");
+        let mesh = spec.build().unwrap();
+        assert_eq!(mesh.faces.len(), 20);
     }
 }

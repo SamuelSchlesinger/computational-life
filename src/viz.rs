@@ -114,6 +114,7 @@ pub enum SurfaceShape {
     Torus { major: usize, minor: usize },
     FlatGrid { width: usize, height: usize },
     HamsterTunnel { num_spheres: usize, segments: usize },
+    ObjFile { path: String },
 }
 
 impl Default for SurfaceShape {
@@ -144,25 +145,27 @@ impl Default for SurfaceParams {
 
 impl SurfaceParams {
     pub fn from_spec(spec: &SurfaceSpec, seed: u64, neighbor_radius: Option<f32>) -> Self {
-        let shape = match *spec {
-            SurfaceSpec::Sphere { subdivisions } => SurfaceShape::Sphere { subdivisions },
-            SurfaceSpec::Torus { major, minor } => SurfaceShape::Torus { major, minor },
-            SurfaceSpec::FlatGrid { width, height } => SurfaceShape::FlatGrid { width, height },
+        let shape = match spec {
+            SurfaceSpec::Sphere { subdivisions } => SurfaceShape::Sphere { subdivisions: *subdivisions },
+            SurfaceSpec::Torus { major, minor } => SurfaceShape::Torus { major: *major, minor: *minor },
+            SurfaceSpec::FlatGrid { width, height } => SurfaceShape::FlatGrid { width: *width, height: *height },
             SurfaceSpec::HamsterTunnel { num_spheres, segments, .. } => {
-                SurfaceShape::HamsterTunnel { num_spheres, segments }
+                SurfaceShape::HamsterTunnel { num_spheres: *num_spheres, segments: *segments }
             }
+            SurfaceSpec::ObjFile { path } => SurfaceShape::ObjFile { path: path.clone() },
         };
         Self { shape, seed, neighbor_radius, last_error: None }
     }
 
     pub fn current_spec(&self) -> SurfaceSpec {
-        match self.shape {
-            SurfaceShape::Sphere { subdivisions } => SurfaceSpec::Sphere { subdivisions },
-            SurfaceShape::Torus { major, minor } => SurfaceSpec::Torus { major, minor },
-            SurfaceShape::FlatGrid { width, height } => SurfaceSpec::FlatGrid { width, height },
+        match &self.shape {
+            SurfaceShape::Sphere { subdivisions } => SurfaceSpec::Sphere { subdivisions: *subdivisions },
+            SurfaceShape::Torus { major, minor } => SurfaceSpec::Torus { major: *major, minor: *minor },
+            SurfaceShape::FlatGrid { width, height } => SurfaceSpec::FlatGrid { width: *width, height: *height },
             SurfaceShape::HamsterTunnel { num_spheres, segments } => {
-                SurfaceSpec::HamsterTunnel { num_spheres, segments, seed: self.seed }
+                SurfaceSpec::HamsterTunnel { num_spheres: *num_spheres, segments: *segments, seed: self.seed }
             }
+            SurfaceShape::ObjFile { path } => SurfaceSpec::ObjFile { path: path.clone() },
         }
     }
 }
@@ -1426,12 +1429,13 @@ fn apply_mesh_rebuild(
 /// Render surface type combo, per-type parameter sliders, seed field, and face count.
 /// Shared between the menu UI and the in-sim sidebar.
 fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
-    let type_labels = ["Sphere", "Torus", "Flat Grid", "Hamster Tunnel"];
+    let type_labels = ["Sphere", "Torus", "Flat Grid", "Hamster Tunnel", "OBJ File"];
     let current = match params.shape {
         SurfaceShape::Sphere { .. } => 0,
         SurfaceShape::Torus { .. } => 1,
         SurfaceShape::FlatGrid { .. } => 2,
         SurfaceShape::HamsterTunnel { .. } => 3,
+        SurfaceShape::ObjFile { .. } => 4,
     };
     let mut selected = current;
     egui::ComboBox::from_label("Type")
@@ -1447,6 +1451,7 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
             1 => SurfaceShape::Torus { major: 32, minor: 16 },
             2 => SurfaceShape::FlatGrid { width: 64, height: 64 },
             3 => SurfaceShape::HamsterTunnel { num_spheres: 10, segments: 24 },
+            4 => SurfaceShape::ObjFile { path: String::new() },
             _ => SurfaceShape::Sphere { subdivisions: 4 },
         };
     }
@@ -1489,6 +1494,17 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
             let rings_per_seg = 16usize;
             let total_rings = *num_spheres * rings_per_seg;
             ui.label(format!("Faces: {}", 2 * *segments * total_rings));
+        }
+        SurfaceShape::ObjFile { path } => {
+            ui.horizontal(|ui| {
+                ui.label("Path:");
+                ui.text_edit_singleline(path);
+            });
+            if path.is_empty() {
+                ui.colored_label(egui::Color32::YELLOW, "Enter the path to a .obj file");
+            } else if !std::path::Path::new(path.as_str()).exists() {
+                ui.colored_label(egui::Color32::RED, "File not found");
+            }
         }
     }
 
