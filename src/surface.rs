@@ -315,8 +315,8 @@ impl SurfaceMesh {
                 let v10 = i_next * minor + j;
                 let v11 = i_next * minor + j_next;
                 let v01 = i * minor + j_next;
-                faces.push([v00, v10, v11]);
-                faces.push([v00, v11, v01]);
+                faces.push([v00, v11, v10]);
+                faces.push([v00, v01, v11]);
             }
         }
 
@@ -601,8 +601,8 @@ impl SurfaceMesh {
             let base1 = ((k + 1) % total_rings) * segments; // wraps around
             for j in 0..segments {
                 let j_next = (j + 1) % segments;
-                faces.push([base0 + j, base1 + j, base1 + j_next]);
-                faces.push([base0 + j, base1 + j_next, base0 + j_next]);
+                faces.push([base0 + j, base1 + j_next, base1 + j]);
+                faces.push([base0 + j, base0 + j_next, base1 + j_next]);
             }
         }
 
