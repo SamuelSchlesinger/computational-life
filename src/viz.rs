@@ -154,6 +154,10 @@ pub enum SurfaceShape {
     Torus { major: usize, minor: usize },
     FlatGrid { width: usize, height: usize },
     HamsterTunnel { num_spheres: usize, segments: usize },
+    Cylinder { segments: usize, rings: usize },
+    KleinBottle { u_segments: usize, v_segments: usize },
+    Heightmap { width: usize, height: usize },
+    TrefoilKnot { rings: usize, segments: usize },
     ObjFile { path: String },
 }
 
@@ -205,6 +209,25 @@ impl SurfaceParams {
                 num_spheres: *num_spheres,
                 segments: *segments,
             },
+            SurfaceSpec::Cylinder { segments, rings } => SurfaceShape::Cylinder {
+                segments: *segments,
+                rings: *rings,
+            },
+            SurfaceSpec::KleinBottle {
+                u_segments,
+                v_segments,
+            } => SurfaceShape::KleinBottle {
+                u_segments: *u_segments,
+                v_segments: *v_segments,
+            },
+            SurfaceSpec::Heightmap { width, height, .. } => SurfaceShape::Heightmap {
+                width: *width,
+                height: *height,
+            },
+            SurfaceSpec::TrefoilKnot { rings, segments } => SurfaceShape::TrefoilKnot {
+                rings: *rings,
+                segments: *segments,
+            },
             SurfaceSpec::ObjFile { path } => SurfaceShape::ObjFile { path: path.clone() },
         };
         Self {
@@ -235,6 +258,26 @@ impl SurfaceParams {
                 num_spheres: *num_spheres,
                 segments: *segments,
                 seed: self.seed,
+            },
+            SurfaceShape::Cylinder { segments, rings } => SurfaceSpec::Cylinder {
+                segments: *segments,
+                rings: *rings,
+            },
+            SurfaceShape::KleinBottle {
+                u_segments,
+                v_segments,
+            } => SurfaceSpec::KleinBottle {
+                u_segments: *u_segments,
+                v_segments: *v_segments,
+            },
+            SurfaceShape::Heightmap { width, height } => SurfaceSpec::Heightmap {
+                width: *width,
+                height: *height,
+                seed: self.seed,
+            },
+            SurfaceShape::TrefoilKnot { rings, segments } => SurfaceSpec::TrefoilKnot {
+                rings: *rings,
+                segments: *segments,
             },
             SurfaceShape::ObjFile { path } => SurfaceSpec::ObjFile { path: path.clone() },
         }
@@ -1753,13 +1796,27 @@ fn apply_mesh_rebuild(
 /// Render surface type combo, per-type parameter sliders, seed field, and face count.
 /// Shared between the menu UI and the in-sim sidebar.
 fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
-    let type_labels = ["Sphere", "Torus", "Flat Grid", "Hamster Tunnel", "OBJ File"];
+    let type_labels = [
+        "Sphere",
+        "Torus",
+        "Flat Grid",
+        "Hamster Tunnel",
+        "Cylinder",
+        "Klein Bottle",
+        "Heightmap",
+        "Trefoil Knot",
+        "OBJ File",
+    ];
     let current = match params.shape {
         SurfaceShape::Sphere { .. } => 0,
         SurfaceShape::Torus { .. } => 1,
         SurfaceShape::FlatGrid { .. } => 2,
         SurfaceShape::HamsterTunnel { .. } => 3,
-        SurfaceShape::ObjFile { .. } => 4,
+        SurfaceShape::Cylinder { .. } => 4,
+        SurfaceShape::KleinBottle { .. } => 5,
+        SurfaceShape::Heightmap { .. } => 6,
+        SurfaceShape::TrefoilKnot { .. } => 7,
+        SurfaceShape::ObjFile { .. } => 8,
     };
     let mut selected = current;
     egui::ComboBox::from_label("Type")
@@ -1784,7 +1841,23 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
                 num_spheres: 10,
                 segments: 24,
             },
-            4 => SurfaceShape::ObjFile {
+            4 => SurfaceShape::Cylinder {
+                segments: 24,
+                rings: 16,
+            },
+            5 => SurfaceShape::KleinBottle {
+                u_segments: 32,
+                v_segments: 16,
+            },
+            6 => SurfaceShape::Heightmap {
+                width: 64,
+                height: 64,
+            },
+            7 => SurfaceShape::TrefoilKnot {
+                rings: 128,
+                segments: 16,
+            },
+            8 => SurfaceShape::ObjFile {
                 path: String::new(),
             },
             _ => SurfaceShape::Sphere { subdivisions: 4 },
@@ -1832,6 +1905,45 @@ fn render_surface_params(ui: &mut egui::Ui, params: &mut SurfaceParams) {
             let rings_per_seg = 16usize;
             let total_rings = *num_spheres * rings_per_seg;
             ui.label(format!("Faces: {}", 2 * *segments * total_rings));
+        }
+        SurfaceShape::Cylinder { segments, rings } => {
+            let mut segs = *segments as u32;
+            let mut r = *rings as u32;
+            ui.add(egui::Slider::new(&mut segs, 3..=256).text("Segments"));
+            ui.add(egui::Slider::new(&mut r, 1..=256).text("Rings"));
+            *segments = segs as usize;
+            *rings = r as usize;
+            ui.label(format!("Faces: {}", 2 * *segments * (*rings + 1)));
+        }
+        SurfaceShape::KleinBottle {
+            u_segments,
+            v_segments,
+        } => {
+            let mut u = *u_segments as u32;
+            let mut v = *v_segments as u32;
+            ui.add(egui::Slider::new(&mut u, 3..=512).text("U segments"));
+            ui.add(egui::Slider::new(&mut v, 3..=256).text("V segments"));
+            *u_segments = u as usize;
+            *v_segments = v as usize;
+            ui.label(format!("Faces: {}", 2 * *u_segments * *v_segments));
+        }
+        SurfaceShape::Heightmap { width, height } => {
+            let mut w = *width as u32;
+            let mut h = *height as u32;
+            ui.add(egui::Slider::new(&mut w, 1..=1024).text("Width"));
+            ui.add(egui::Slider::new(&mut h, 1..=1024).text("Height"));
+            *width = w as usize;
+            *height = h as usize;
+            ui.label(format!("Faces: {}", 2 * *width * *height));
+        }
+        SurfaceShape::TrefoilKnot { rings, segments } => {
+            let mut r = *rings as u32;
+            let mut segs = *segments as u32;
+            ui.add(egui::Slider::new(&mut r, 3..=512).text("Rings"));
+            ui.add(egui::Slider::new(&mut segs, 3..=64).text("Segments"));
+            *rings = r as usize;
+            *segments = segs as usize;
+            ui.label(format!("Faces: {}", 2 * *rings * *segments));
         }
         SurfaceShape::ObjFile { path } => {
             ui.horizontal(|ui| {

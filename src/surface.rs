@@ -614,6 +614,317 @@ impl SurfaceMesh {
         );
         Self::from_geometry(vertices, faces)
     }
+
+    /// Generate a cylinder (open tube). Wraps radially but open at top/bottom.
+    ///
+    /// - `segments`: vertices per ring cross-section (>= 3).
+    /// - `rings`: number of height divisions (>= 1).
+    pub fn cylinder(segments: usize, rings: usize) -> Result<Self, String> {
+        if segments < 3 {
+            return Err("Cylinder requires at least 3 circumferential segments".into());
+        }
+        if rings < 1 {
+            return Err("Cylinder requires at least 1 ring division".into());
+        }
+
+        let radius = 0.5_f32;
+        let num_rows = rings + 1;
+
+        let mut vertices = Vec::with_capacity(num_rows * segments + 2);
+        for i in 0..num_rows {
+            let y = -1.0 + 2.0 * i as f32 / rings as f32;
+            for j in 0..segments {
+                let theta = 2.0 * std::f32::consts::PI * j as f32 / segments as f32;
+                vertices.push([radius * theta.cos(), y, radius * theta.sin()]);
+            }
+        }
+
+        // Cap center vertices.
+        let bottom_center = vertices.len();
+        vertices.push([0.0, -1.0, 0.0]);
+        let top_center = vertices.len();
+        vertices.push([0.0, 1.0, 0.0]);
+
+        let body_faces = 2 * segments * rings;
+        let cap_faces = 2 * segments;
+        let mut faces = Vec::with_capacity(body_faces + cap_faces);
+
+        // Body: winding gives outward-pointing normals.
+        for i in 0..rings {
+            let base0 = i * segments;
+            let base1 = (i + 1) * segments;
+            for j in 0..segments {
+                let j_next = (j + 1) % segments;
+                faces.push([base0 + j, base1 + j, base1 + j_next]);
+                faces.push([base0 + j, base1 + j_next, base0 + j_next]);
+            }
+        }
+
+        // Bottom cap: normal points down (-Y).
+        let bottom_base = 0;
+        for j in 0..segments {
+            let j_next = (j + 1) % segments;
+            faces.push([bottom_center, bottom_base + j, bottom_base + j_next]);
+        }
+
+        // Top cap: normal points up (+Y).
+        let top_base = rings * segments;
+        for j in 0..segments {
+            let j_next = (j + 1) % segments;
+            faces.push([top_center, top_base + j_next, top_base + j]);
+        }
+
+        let face_count = faces.len();
+        eprintln!("Surface: cylinder ({segments} segments, {rings} rings, {face_count} faces)");
+        Self::from_geometry(vertices, faces)
+    }
+
+    /// Generate a Klein bottle via the figure-8 immersion in 3D.
+    ///
+    /// This is a non-orientable closed surface — the `u` direction wraps with a
+    /// reversal in `v`, giving the surface its single-sided topology.
+    ///
+    /// - `u_segments`: segments along the main loop (>= 3).
+    /// - `v_segments`: segments around the cross-section (>= 3).
+    pub fn klein_bottle(u_segments: usize, v_segments: usize) -> Result<Self, String> {
+        if u_segments < 3 || v_segments < 3 {
+            return Err("Klein bottle requires at least 3 segments in each dimension".into());
+        }
+
+        let r = 2.0_f32;
+        let pi2 = 2.0 * std::f32::consts::PI;
+
+        let mut vertices = Vec::with_capacity(u_segments * v_segments);
+        for i in 0..u_segments {
+            let u = pi2 * i as f32 / u_segments as f32;
+            for j in 0..v_segments {
+                let v = pi2 * j as f32 / v_segments as f32;
+                let cos_u2 = (u / 2.0).cos();
+                let sin_u2 = (u / 2.0).sin();
+                let sin_v = v.sin();
+                let sin_2v = (2.0 * v).sin();
+
+                let w = r + cos_u2 * sin_v - sin_u2 * sin_2v;
+                let x = w * u.cos();
+                let y = w * u.sin();
+                let z = sin_u2 * sin_v + cos_u2 * sin_2v;
+                vertices.push([x, y, z]);
+            }
+        }
+
+        let idx = |i: usize, j: usize| -> usize { i * v_segments + j };
+
+        let mut faces = Vec::with_capacity(2 * u_segments * v_segments);
+        for i in 0..u_segments {
+            for j in 0..v_segments {
+                let j_next = (j + 1) % v_segments;
+
+                if i < u_segments - 1 {
+                    let v00 = idx(i, j);
+                    let v10 = idx(i + 1, j);
+                    let v11 = idx(i + 1, j_next);
+                    let v01 = idx(i, j_next);
+                    faces.push([v00, v10, v11]);
+                    faces.push([v00, v11, v01]);
+                } else {
+                    // Klein bottle seam: u wraps with v-reversal.
+                    let v00 = idx(i, j);
+                    let v01 = idx(i, j_next);
+                    let j_mapped = (v_segments - j) % v_segments;
+                    let j_next_mapped = (v_segments - j_next) % v_segments;
+                    let v10 = idx(0, j_mapped);
+                    let v11 = idx(0, j_next_mapped);
+                    faces.push([v00, v10, v11]);
+                    faces.push([v00, v11, v01]);
+                }
+            }
+        }
+
+        let face_count = faces.len();
+        eprintln!(
+            "Surface: Klein bottle ({u_segments}×{v_segments}, {face_count} faces)"
+        );
+        Self::from_geometry(vertices, faces)
+    }
+
+    /// Generate a heightmap: a flat grid with procedural noise height.
+    ///
+    /// Uses fractal Brownian motion (multi-octave value noise) to create
+    /// terrain-like elevation. Same topology as `flat_grid` but with curvature.
+    ///
+    /// - `width`, `height`: grid dimensions (>= 1).
+    /// - `seed`: RNG seed for the noise function.
+    pub fn heightmap(width: usize, height: usize, seed: u64) -> Result<Self, String> {
+        if width == 0 || height == 0 {
+            return Err("Heightmap dimensions must be positive".into());
+        }
+
+        let scale = 2.0 / (width.max(height) as f32);
+        let x_offset = width as f32 * scale / 2.0;
+        let y_offset = height as f32 * scale / 2.0;
+        let amplitude = 0.4_f32;
+
+        let mut vertices = Vec::with_capacity((width + 1) * (height + 1));
+        for j in 0..=height {
+            for i in 0..=width {
+                let x = i as f32 * scale - x_offset;
+                let y = j as f32 * scale - y_offset;
+                let noise = fbm_2d(
+                    i as f32 * 4.0 / width as f32,
+                    j as f32 * 4.0 / height as f32,
+                    seed,
+                    4,
+                );
+                let z = amplitude * (2.0 * noise - 1.0);
+                vertices.push([x, y, z]);
+            }
+        }
+
+        let cols = width + 1;
+        let mut faces = Vec::with_capacity(2 * width * height);
+        for j in 0..height {
+            for i in 0..width {
+                let v00 = j * cols + i;
+                let v10 = j * cols + i + 1;
+                let v01 = (j + 1) * cols + i;
+                let v11 = (j + 1) * cols + i + 1;
+                faces.push([v00, v10, v11]);
+                faces.push([v00, v11, v01]);
+            }
+        }
+
+        let face_count = faces.len();
+        eprintln!("Surface: heightmap ({width}×{height}, {face_count} faces)");
+        Self::from_geometry(vertices, faces)
+    }
+
+    /// Generate a tube extruded along a trefoil knot curve.
+    ///
+    /// The trefoil knot is the simplest non-trivial knot. The tube follows the
+    /// parametric curve `(sin t + 2 sin 2t, cos t − 2 cos 2t, −sin 3t)` and
+    /// uses parallel transport with holonomy correction for a twist-free mesh.
+    ///
+    /// - `rings`: sample points along the knot curve (>= 3).
+    /// - `segments`: vertices per ring cross-section (>= 3).
+    pub fn trefoil_knot(rings: usize, segments: usize) -> Result<Self, String> {
+        if rings < 3 {
+            return Err("Trefoil knot requires at least 3 rings".into());
+        }
+        if segments < 3 {
+            return Err("Trefoil knot requires at least 3 circumferential segments".into());
+        }
+
+        const TUBE_RADIUS: f32 = 0.3;
+        let pi2 = 2.0 * std::f32::consts::PI;
+
+        // Sample positions and tangents along the trefoil knot curve.
+        let mut ring_positions: Vec<[f32; 3]> = Vec::with_capacity(rings);
+        let mut ring_tangents: Vec<[f32; 3]> = Vec::with_capacity(rings);
+
+        for i in 0..rings {
+            let t = pi2 * i as f32 / rings as f32;
+            ring_positions.push([
+                t.sin() + 2.0 * (2.0 * t).sin(),
+                t.cos() - 2.0 * (2.0 * t).cos(),
+                -(3.0 * t).sin(),
+            ]);
+            // Derivative of the parametric curve.
+            ring_tangents.push(normalize3([
+                t.cos() + 4.0 * (2.0 * t).cos(),
+                -t.sin() + 4.0 * (2.0 * t).sin(),
+                -3.0 * (3.0 * t).cos(),
+            ]));
+        }
+
+        // ── Parallel transport with holonomy correction ──
+        let t0 = ring_tangents[0];
+        let up_candidate = if t0[1].abs() < 0.9 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        let initial_normal = normalize3(cross3(t0, up_candidate));
+        let initial_binormal = cross3(t0, initial_normal);
+
+        // Pass 1: measure holonomy twist around full loop.
+        let mut normal = initial_normal;
+        for ring_idx in 1..rings {
+            let prev_t = ring_tangents[ring_idx - 1];
+            let tangent = ring_tangents[ring_idx];
+            let d = dot3(prev_t, tangent);
+            if d < 0.9999 {
+                let axis = normalize3(cross3(prev_t, tangent));
+                let angle = d.clamp(-1.0, 1.0).acos();
+                normal = normalize3(rotate_around_axis(normal, axis, angle));
+            }
+        }
+        // Closure edge.
+        {
+            let prev_t = ring_tangents[rings - 1];
+            let tangent = ring_tangents[0];
+            let d = dot3(prev_t, tangent);
+            if d < 0.9999 {
+                let axis = normalize3(cross3(prev_t, tangent));
+                let angle = d.clamp(-1.0, 1.0).acos();
+                normal = normalize3(rotate_around_axis(normal, axis, angle));
+            }
+        }
+        let cos_twist = dot3(normal, initial_normal);
+        let sin_twist = dot3(normal, initial_binormal);
+        let total_twist = sin_twist.atan2(cos_twist);
+
+        // Pass 2: generate ring vertices with correction.
+        let mut normal = initial_normal;
+        let mut vertices: Vec<[f32; 3]> = Vec::with_capacity(rings * segments);
+
+        for ring_idx in 0..rings {
+            let pos = ring_positions[ring_idx];
+            let tangent = ring_tangents[ring_idx];
+
+            if ring_idx > 0 {
+                let prev_t = ring_tangents[ring_idx - 1];
+                let d = dot3(prev_t, tangent);
+                if d < 0.9999 {
+                    let axis = normalize3(cross3(prev_t, tangent));
+                    let angle = d.clamp(-1.0, 1.0).acos();
+                    normal = normalize3(rotate_around_axis(normal, axis, angle));
+                }
+            }
+
+            let correction = -total_twist * (ring_idx as f32 / rings as f32);
+            let cn = normalize3(rotate_around_axis(normal, tangent, correction));
+            let cb = cross3(tangent, cn);
+
+            for j in 0..segments {
+                let theta = pi2 * j as f32 / segments as f32;
+                let c = theta.cos();
+                let s = theta.sin();
+                vertices.push([
+                    pos[0] + TUBE_RADIUS * (c * cn[0] + s * cb[0]),
+                    pos[1] + TUBE_RADIUS * (c * cn[1] + s * cb[1]),
+                    pos[2] + TUBE_RADIUS * (c * cn[2] + s * cb[2]),
+                ]);
+            }
+        }
+
+        // Connect adjacent rings (loop wraps around).
+        let mut faces: Vec<[usize; 3]> = Vec::with_capacity(2 * segments * rings);
+        for k in 0..rings {
+            let base0 = k * segments;
+            let base1 = ((k + 1) % rings) * segments;
+            for j in 0..segments {
+                let j_next = (j + 1) % segments;
+                faces.push([base0 + j, base1 + j_next, base1 + j]);
+                faces.push([base0 + j, base0 + j_next, base1 + j_next]);
+            }
+        }
+
+        let face_count = faces.len();
+        eprintln!(
+            "Surface: trefoil knot ({rings} rings, {segments} segments, {face_count} faces)"
+        );
+        Self::from_geometry(vertices, faces)
+    }
 }
 
 // ─── Surface spec ───────────────────────────────────────────────────────────
@@ -637,6 +948,23 @@ pub enum SurfaceSpec {
         segments: usize,
         seed: u64,
     },
+    Cylinder {
+        segments: usize,
+        rings: usize,
+    },
+    KleinBottle {
+        u_segments: usize,
+        v_segments: usize,
+    },
+    Heightmap {
+        width: usize,
+        height: usize,
+        seed: u64,
+    },
+    TrefoilKnot {
+        rings: usize,
+        segments: usize,
+    },
     ObjFile {
         path: String,
     },
@@ -654,6 +982,21 @@ impl SurfaceSpec {
                 segments,
                 seed,
             } => SurfaceMesh::hamster_tunnel(*num_spheres, *segments, *seed),
+            SurfaceSpec::Cylinder { segments, rings } => {
+                SurfaceMesh::cylinder(*segments, *rings)
+            }
+            SurfaceSpec::KleinBottle {
+                u_segments,
+                v_segments,
+            } => SurfaceMesh::klein_bottle(*u_segments, *v_segments),
+            SurfaceSpec::Heightmap {
+                width,
+                height,
+                seed,
+            } => SurfaceMesh::heightmap(*width, *height, *seed),
+            SurfaceSpec::TrefoilKnot { rings, segments } => {
+                SurfaceMesh::trefoil_knot(*rings, *segments)
+            }
             SurfaceSpec::ObjFile { path } => SurfaceMesh::from_obj(path),
         }
     }
@@ -665,6 +1008,10 @@ impl SurfaceSpec {
             SurfaceSpec::Torus { .. } => "Torus",
             SurfaceSpec::FlatGrid { .. } => "Flat Grid",
             SurfaceSpec::HamsterTunnel { .. } => "Hamster Tunnel",
+            SurfaceSpec::Cylinder { .. } => "Cylinder",
+            SurfaceSpec::KleinBottle { .. } => "Klein Bottle",
+            SurfaceSpec::Heightmap { .. } => "Heightmap",
+            SurfaceSpec::TrefoilKnot { .. } => "Trefoil Knot",
             SurfaceSpec::ObjFile { .. } => "OBJ File",
         }
     }
@@ -802,6 +1149,54 @@ fn rotate_around_axis(v: [f32; 3], axis: [f32; 3], angle: f32) -> [f32; 3] {
         v[1] * c + cr[1] * s + axis[1] * d * (1.0 - c),
         v[2] * c + cr[2] * s + axis[2] * d * (1.0 - c),
     ]
+}
+
+/// Hash two integer coordinates with a seed to produce a value in [0, 1).
+fn hash_noise(ix: i32, iy: i32, seed: u64) -> f32 {
+    let mut h = seed;
+    h = h.wrapping_add(ix as u64).wrapping_mul(6364136223846793005);
+    h = h.wrapping_add(iy as u64).wrapping_mul(6364136223846793005);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51afd7ed558ccd);
+    h ^= h >> 33;
+    (h & 0xFFFFFF) as f32 / 16777216.0
+}
+
+/// 2D value noise with smoothstep interpolation.
+fn value_noise_2d(x: f32, y: f32, seed: u64) -> f32 {
+    let ix = x.floor() as i32;
+    let iy = y.floor() as i32;
+    let fx = x - ix as f32;
+    let fy = y - iy as f32;
+    let sx = fx * fx * (3.0 - 2.0 * fx);
+    let sy = fy * fy * (3.0 - 2.0 * fy);
+    let h00 = hash_noise(ix, iy, seed);
+    let h10 = hash_noise(ix + 1, iy, seed);
+    let h01 = hash_noise(ix, iy + 1, seed);
+    let h11 = hash_noise(ix + 1, iy + 1, seed);
+    let v0 = h00 + sx * (h10 - h00);
+    let v1 = h01 + sx * (h11 - h01);
+    v0 + sy * (v1 - v0)
+}
+
+/// Fractal Brownian motion: multi-octave value noise.
+fn fbm_2d(x: f32, y: f32, seed: u64, octaves: u32) -> f32 {
+    let mut value = 0.0;
+    let mut amplitude = 1.0;
+    let mut frequency = 1.0;
+    let mut max_value = 0.0;
+    for i in 0..octaves {
+        value += amplitude
+            * value_noise_2d(
+                x * frequency,
+                y * frequency,
+                seed.wrapping_add(i as u64 * 1337),
+            );
+        max_value += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2.0;
+    }
+    value / max_value
 }
 
 /// Sample from geometric distribution via CDF inversion.
@@ -1258,5 +1653,154 @@ f 4 1 5 8
         assert_eq!(spec.label(), "OBJ File");
         let mesh = spec.build().unwrap();
         assert_eq!(mesh.faces.len(), 20);
+    }
+
+    #[test]
+    fn test_cylinder_face_count() {
+        // Body: 2 * segments * rings, caps: 2 * segments
+        let mesh = SurfaceMesh::cylinder(12, 8).unwrap();
+        assert_eq!(mesh.faces.len(), 2 * 12 * 8 + 2 * 12);
+    }
+
+    #[test]
+    fn test_cylinder_min_params() {
+        let mesh = SurfaceMesh::cylinder(3, 1).unwrap();
+        assert_eq!(mesh.faces.len(), 2 * 3 * 1 + 2 * 3);
+    }
+
+    #[test]
+    fn test_cylinder_invalid_params() {
+        assert!(SurfaceMesh::cylinder(2, 4).is_err());
+        assert!(SurfaceMesh::cylinder(4, 0).is_err());
+    }
+
+    #[test]
+    fn test_cylinder_adjacency_symmetric() {
+        let mesh = SurfaceMesh::cylinder(8, 4).unwrap();
+        for (i, adj) in mesh.face_adjacency.iter().enumerate() {
+            for &j in adj {
+                assert!(
+                    mesh.face_adjacency[j].contains(&i),
+                    "Face {i} adjacent to {j}, but not vice versa"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_klein_bottle_face_count() {
+        let mesh = SurfaceMesh::klein_bottle(16, 8).unwrap();
+        assert_eq!(mesh.faces.len(), 2 * 16 * 8);
+    }
+
+    #[test]
+    fn test_klein_bottle_min_params() {
+        let mesh = SurfaceMesh::klein_bottle(3, 3).unwrap();
+        assert_eq!(mesh.faces.len(), 2 * 3 * 3);
+    }
+
+    #[test]
+    fn test_klein_bottle_invalid_params() {
+        assert!(SurfaceMesh::klein_bottle(2, 8).is_err());
+        assert!(SurfaceMesh::klein_bottle(8, 2).is_err());
+    }
+
+    #[test]
+    fn test_klein_bottle_adjacency_symmetric() {
+        let mesh = SurfaceMesh::klein_bottle(12, 6).unwrap();
+        for (i, adj) in mesh.face_adjacency.iter().enumerate() {
+            for &j in adj {
+                assert!(
+                    mesh.face_adjacency[j].contains(&i),
+                    "Face {i} adjacent to {j}, but not vice versa"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_klein_bottle_all_faces_have_3_adjacent() {
+        // Klein bottle is a closed surface — every face should have exactly 3 neighbors.
+        let mesh = SurfaceMesh::klein_bottle(10, 6).unwrap();
+        for (i, adj) in mesh.face_adjacency.iter().enumerate() {
+            assert_eq!(
+                adj.len(),
+                3,
+                "Face {i} has {} adjacent faces, expected 3",
+                adj.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_heightmap_face_count() {
+        let mesh = SurfaceMesh::heightmap(16, 12, 42).unwrap();
+        assert_eq!(mesh.faces.len(), 2 * 16 * 12);
+    }
+
+    #[test]
+    fn test_heightmap_deterministic() {
+        let m1 = SurfaceMesh::heightmap(8, 8, 42).unwrap();
+        let m2 = SurfaceMesh::heightmap(8, 8, 42).unwrap();
+        assert_eq!(m1.vertices, m2.vertices);
+        assert_eq!(m1.faces, m2.faces);
+    }
+
+    #[test]
+    fn test_heightmap_different_seeds_differ() {
+        let m1 = SurfaceMesh::heightmap(8, 8, 42).unwrap();
+        let m2 = SurfaceMesh::heightmap(8, 8, 99).unwrap();
+        assert_ne!(m1.vertices, m2.vertices);
+    }
+
+    #[test]
+    fn test_heightmap_invalid_params() {
+        assert!(SurfaceMesh::heightmap(0, 8, 0).is_err());
+        assert!(SurfaceMesh::heightmap(8, 0, 0).is_err());
+    }
+
+    #[test]
+    fn test_trefoil_knot_face_count() {
+        let mesh = SurfaceMesh::trefoil_knot(64, 8).unwrap();
+        assert_eq!(mesh.faces.len(), 2 * 64 * 8);
+    }
+
+    #[test]
+    fn test_trefoil_knot_min_params() {
+        let mesh = SurfaceMesh::trefoil_knot(3, 3).unwrap();
+        assert_eq!(mesh.faces.len(), 2 * 3 * 3);
+    }
+
+    #[test]
+    fn test_trefoil_knot_invalid_params() {
+        assert!(SurfaceMesh::trefoil_knot(2, 8).is_err());
+        assert!(SurfaceMesh::trefoil_knot(8, 2).is_err());
+    }
+
+    #[test]
+    fn test_trefoil_knot_adjacency_symmetric() {
+        let mesh = SurfaceMesh::trefoil_knot(32, 6).unwrap();
+        for (i, adj) in mesh.face_adjacency.iter().enumerate() {
+            for &j in adj {
+                assert!(
+                    mesh.face_adjacency[j].contains(&i),
+                    "Face {i} adjacent to {j}, but not vice versa"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_trefoil_knot_all_faces_have_3_adjacent() {
+        // Trefoil knot tube is a closed surface — every face should have 3 neighbors.
+        let mesh = SurfaceMesh::trefoil_knot(32, 6).unwrap();
+        for (i, adj) in mesh.face_adjacency.iter().enumerate() {
+            assert_eq!(
+                adj.len(),
+                3,
+                "Face {i} has {} adjacent faces, expected 3",
+                adj.len()
+            );
+        }
     }
 }
