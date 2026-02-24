@@ -76,24 +76,24 @@ impl FixedStack {
 }
 
 /// Per-context state for battle mode execution.
-struct ForthBattleState {
+struct ForthState {
     stack: FixedStack,
     pc: usize,
 }
 
 /// Initialize a battle context with an empty stack and the given starting PC.
-fn forth_battle_init(_tape_len: usize, start_pc: usize) -> ForthBattleState {
-    ForthBattleState {
+fn forth_init(_tape_len: usize, start_pc: usize) -> ForthState {
+    ForthState {
         stack: FixedStack::new(),
         pc: start_pc,
     }
 }
 
-/// Execute exactly one Forth instruction for a battle context.
+/// Execute exactly one Forth instruction.
 ///
 /// Returns `true` if execution should continue, `false` if the context has
 /// halted (PC out of bounds or backward jump underflow).
-fn forth_battle_step(state: &mut ForthBattleState, tape: &mut [u8]) -> bool {
+fn forth_step(state: &mut ForthState, tape: &mut [u8]) -> bool {
     let len = tape.len();
     if state.pc >= len {
         return false;
@@ -238,142 +238,17 @@ impl Substrate for Forth {
             return 0;
         }
 
-        let mut stack = FixedStack::new();
-        let mut pc: usize = 0;
-        let mut steps: usize = 0;
+        let mut state = ForthState {
+            stack: FixedStack::new(),
+            pc: 0,
+        };
+        let mut steps = 0;
 
-        while pc < len && steps < step_limit {
+        while state.pc < len && steps < step_limit {
             steps += 1;
-            let instr = tape[pc];
-
-            match instr >> 6 {
-                // 00: fixed opcodes (0x00-0x0D valid, rest are no-ops)
-                0b00 => {
-                    match instr & 0x0F {
-                        0x00 if instr < 0x10 => {
-                            // READ: <top> = *<top>
-                            let top = stack.pop();
-                            let addr = top as usize % len;
-                            let val = tape[addr];
-                            stack.push(val);
-                        }
-                        0x01 if instr < 0x10 => {
-                            // READ64: <top> = *(<top> + 64)
-                            let top = stack.pop();
-                            let addr = ((top as usize).wrapping_add(64)) % len;
-                            let val = tape[addr];
-                            stack.push(val);
-                        }
-                        0x02 if instr < 0x10 => {
-                            // WRITE: *<top> = <top-1>; pop; pop
-                            let addr_val = stack.pop();
-                            let data_val = stack.pop();
-                            let addr = addr_val as usize % len;
-                            tape[addr] = data_val;
-                        }
-                        0x03 if instr < 0x10 => {
-                            // WRITE64: *(<top> + 64) = <top-1>; pop; pop
-                            let addr_val = stack.pop();
-                            let data_val = stack.pop();
-                            let addr = ((addr_val as usize).wrapping_add(64)) % len;
-                            tape[addr] = data_val;
-                        }
-                        0x04 if instr < 0x10 => {
-                            // DUP: push <top>
-                            let top = stack.top();
-                            stack.push(top);
-                        }
-                        0x05 if instr < 0x10 => {
-                            // POP: discard top
-                            stack.pop();
-                        }
-                        0x06 if instr < 0x10 => {
-                            // SWAP: swap <top> and <top-1>
-                            stack.swap_top_two();
-                        }
-                        0x07 if instr < 0x10 => {
-                            // SKIPNZ: if <top> != 0: pc++
-                            if stack.top() != 0 {
-                                pc += 1;
-                            }
-                        }
-                        0x08 if instr < 0x10 => {
-                            // INC: <top> = <top> + 1
-                            if let Some(top) = stack.top_mut() {
-                                *top = top.wrapping_add(1);
-                            } else {
-                                stack.push(1);
-                            }
-                        }
-                        0x09 if instr < 0x10 => {
-                            // DEC: <top> = <top> - 1
-                            if let Some(top) = stack.top_mut() {
-                                *top = top.wrapping_sub(1);
-                            } else {
-                                stack.push(255);
-                            }
-                        }
-                        0x0A if instr < 0x10 => {
-                            // ADD: <top-1> = <top> + <top-1>; pop
-                            let a = stack.pop();
-                            if let Some(b) = stack.top_mut() {
-                                *b = a.wrapping_add(*b);
-                            } else {
-                                stack.push(a);
-                            }
-                        }
-                        0x0B if instr < 0x10 => {
-                            // SUB: <top-1> = <top> - <top-1>; pop
-                            let a = stack.pop();
-                            if let Some(b) = stack.top_mut() {
-                                *b = a.wrapping_sub(*b);
-                            } else {
-                                stack.push(a);
-                            }
-                        }
-                        0x0C if instr < 0x10 => {
-                            // COPY: *(<top> + 64) = *<top>; pop
-                            let addr_val = stack.pop();
-                            let src = addr_val as usize % len;
-                            let dst = ((addr_val as usize).wrapping_add(64)) % len;
-                            tape[dst] = tape[src];
-                        }
-                        0x0D if instr < 0x10 => {
-                            // RCOPY: *<top> = *(<top> + 64); pop
-                            let addr_val = stack.pop();
-                            let dst = addr_val as usize % len;
-                            let src = ((addr_val as usize).wrapping_add(64)) % len;
-                            tape[dst] = tape[src];
-                        }
-                        _ => {
-                            // No-op (0x0E-0x0F in low nibble with high bits 00,
-                            // or any 0x10-0x3F byte)
-                        }
-                    }
-                }
-                // 01: push immediate (low 6 bits as unsigned value)
-                0b01 => {
-                    let val = instr & 0x3F;
-                    stack.push(val);
-                }
-                // 10 or 11: relative jump
-                _ => {
-                    let offset = (instr & 0x3F) as usize + 1;
-                    if instr & 0x40 == 0 {
-                        // bit 6 = 0: forward (positive)
-                        pc = pc.wrapping_add(offset);
-                    } else {
-                        // bit 6 = 1: backward (negative)
-                        if offset > pc {
-                            break; // would jump before start
-                        }
-                        pc -= offset;
-                    }
-                    continue; // don't do pc += 1 below
-                }
+            if !forth_step(&mut state, tape) {
+                break;
             }
-
-            pc += 1;
         }
 
         steps
@@ -384,8 +259,8 @@ impl Substrate for Forth {
             return 0;
         }
 
-        let mut ctx_a = forth_battle_init(tape.len(), 0);
-        let mut ctx_b = forth_battle_init(tape.len(), program_size);
+        let mut ctx_a = forth_init(tape.len(), 0);
+        let mut ctx_b = forth_init(tape.len(), program_size);
 
         let mut a_alive = true;
         let mut b_alive = true;
@@ -394,14 +269,14 @@ impl Substrate for Forth {
         while (a_alive || b_alive) && steps < step_limit {
             if a_alive {
                 steps += 1;
-                a_alive = forth_battle_step(&mut ctx_a, tape);
+                a_alive = forth_step(&mut ctx_a, tape);
                 if steps >= step_limit {
                     break;
                 }
             }
             if b_alive {
                 steps += 1;
-                b_alive = forth_battle_step(&mut ctx_b, tape);
+                b_alive = forth_step(&mut ctx_b, tape);
             }
         }
 

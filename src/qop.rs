@@ -33,16 +33,16 @@ const SET_TAIL: u8 = 0x0D;
 const GET_HEAD: u8 = 0x0E;
 const GET_TAIL: u8 = 0x0F;
 
-struct QopBattleState {
+struct QopState {
     pc: usize,
     head: u8,
     tail: u8,
     acc: u8,
 }
 
-fn qop_battle_init(tape_len: usize, start_pc: usize) -> QopBattleState {
+fn qop_init(tape_len: usize, start_pc: usize) -> QopState {
     let _ = tape_len;
-    QopBattleState {
+    QopState {
         pc: start_pc,
         head: 0,
         tail: 0,
@@ -50,8 +50,8 @@ fn qop_battle_init(tape_len: usize, start_pc: usize) -> QopBattleState {
     }
 }
 
-/// Execute one Qop instruction for a battle context. Returns true if still running.
-fn qop_battle_step(state: &mut QopBattleState, tape: &mut [u8]) -> bool {
+/// Execute one Qop instruction. Returns true if still running.
+fn qop_step(state: &mut QopState, tape: &mut [u8]) -> bool {
     let len = tape.len();
     if state.pc >= len {
         return false;
@@ -158,106 +158,19 @@ impl Substrate for Qop {
             return 0;
         }
 
-        let mut pc: usize = 0;
-        let mut head: u8 = 0;
-        let mut tail: u8 = (len / 2) as u8;
-        let mut acc: u8 = 0;
-        let mut steps: usize = 0;
+        let mut state = QopState {
+            pc: 0,
+            head: 0,
+            tail: (len / 2) as u8,
+            acc: 0,
+        };
+        let mut steps = 0;
 
-        while pc < len && steps < step_limit {
+        while state.pc < len && steps < step_limit {
             steps += 1;
-            match tape[pc] {
-                HALT => break,
-                PASS => {
-                    let src = head as usize % len;
-                    let dst = tail as usize % len;
-                    tape[dst] = tape[src];
-                    head = head.wrapping_add(1);
-                    tail = tail.wrapping_add(1);
-                }
-                EAT => {
-                    acc = tape[head as usize % len];
-                    head = head.wrapping_add(1);
-                }
-                SPIT => {
-                    tape[tail as usize % len] = acc;
-                    tail = tail.wrapping_add(1);
-                }
-                SKIP => {
-                    head = head.wrapping_add(1);
-                }
-                GAP => {
-                    tape[tail as usize % len] = 0;
-                    tail = tail.wrapping_add(1);
-                }
-                INC => {
-                    acc = acc.wrapping_add(1);
-                }
-                DEC => {
-                    acc = acc.wrapping_sub(1);
-                }
-                XOR => {
-                    acc ^= tape[head as usize % len];
-                }
-                JMP_REL => {
-                    if pc + 1 >= len {
-                        break;
-                    }
-                    let offset = tape[pc + 1] as i8;
-                    let new_pc = pc as isize + 2 + offset as isize;
-                    if new_pc < 0 {
-                        break;
-                    }
-                    pc = new_pc as usize;
-                    continue; // don't do pc += 1 below
-                }
-                JZ => {
-                    if pc + 1 >= len {
-                        break;
-                    }
-                    if acc == 0 {
-                        let offset = tape[pc + 1] as i8;
-                        let new_pc = pc as isize + 2 + offset as isize;
-                        if new_pc < 0 {
-                            break;
-                        }
-                        pc = new_pc as usize;
-                        continue;
-                    }
-                    pc += 2;
-                    continue;
-                }
-                JNZ => {
-                    if pc + 1 >= len {
-                        break;
-                    }
-                    if acc != 0 {
-                        let offset = tape[pc + 1] as i8;
-                        let new_pc = pc as isize + 2 + offset as isize;
-                        if new_pc < 0 {
-                            break;
-                        }
-                        pc = new_pc as usize;
-                        continue;
-                    }
-                    pc += 2;
-                    continue;
-                }
-                SET_HEAD => {
-                    head = acc;
-                }
-                SET_TAIL => {
-                    tail = acc;
-                }
-                GET_HEAD => {
-                    acc = head;
-                }
-                GET_TAIL => {
-                    acc = tail;
-                }
-                _ => {} // NOP (0x10-0xFF)
+            if !qop_step(&mut state, tape) {
+                break;
             }
-            pc += 1;
         }
 
         steps
@@ -268,23 +181,23 @@ impl Substrate for Qop {
         if len == 0 {
             return 0;
         }
-        let mut a = qop_battle_init(len, 0);
+        let mut a = qop_init(len, 0);
         a.tail = ps as u8;
-        let mut b = qop_battle_init(len, ps);
+        let mut b = qop_init(len, ps);
         b.head = ps as u8;
         let mut steps = 0;
         let mut halted_a = false;
         let mut halted_b = false;
         while steps < step_limit && (!halted_a || !halted_b) {
             if !halted_a {
-                halted_a = !qop_battle_step(&mut a, tape);
+                halted_a = !qop_step(&mut a, tape);
                 steps += 1;
                 if steps >= step_limit {
                     break;
                 }
             }
             if !halted_b {
-                halted_b = !qop_battle_step(&mut b, tape);
+                halted_b = !qop_step(&mut b, tape);
                 steps += 1;
             }
         }

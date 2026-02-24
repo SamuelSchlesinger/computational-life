@@ -21,13 +21,13 @@ use crate::substrate::Substrate;
 /// All arithmetic wraps modulo 256 (u8). All addresses wrap modulo tape length.
 pub struct Rig;
 
-struct RigBattleState {
+struct RigState {
     pc: usize,
     r: [u8; 4],
 }
 
-/// Execute one Rig instruction for a battle context. Returns true if still running.
-fn rig_battle_step(state: &mut RigBattleState, tape: &mut [u8]) -> bool {
+/// Execute one Rig instruction. Returns true if still running.
+fn rig_step(state: &mut RigState, tape: &mut [u8]) -> bool {
     let len = tape.len();
     if state.pc >= len {
         return false;
@@ -108,78 +108,17 @@ impl Substrate for Rig {
             return 0;
         }
 
-        let mut pc: usize = 0;
-        let mut r: [u8; 4] = [0, (len / 2) as u8, 0, 0];
-        let mut steps: usize = 0;
+        let mut state = RigState {
+            pc: 0,
+            r: [0, (len / 2) as u8, 0, 0],
+        };
+        let mut steps = 0;
 
-        while pc < len && steps < step_limit {
+        while state.pc < len && steps < step_limit {
             steps += 1;
-            let instr = tape[pc];
-            let dst = ((instr >> 2) & 0x03) as usize;
-            let src = (instr & 0x03) as usize;
-
-            match instr >> 4 {
-                0x0 => {
-                    // LOAD: r[dst] = tape[r[src]]
-                    r[dst] = tape[r[src] as usize % len];
-                }
-                0x1 => {
-                    // STORE: tape[r[dst]] = r[src]
-                    tape[r[dst] as usize % len] = r[src];
-                }
-                0x2 => {
-                    // MOV: r[dst] = r[src]
-                    r[dst] = r[src];
-                }
-                0x3 => {
-                    // ADD: r[dst] += r[src]
-                    r[dst] = r[dst].wrapping_add(r[src]);
-                }
-                0x4 => {
-                    // SUB: r[dst] -= r[src]
-                    r[dst] = r[dst].wrapping_sub(r[src]);
-                }
-                0x5 => {
-                    // XOR: r[dst] ^= r[src]
-                    r[dst] ^= r[src];
-                }
-                0x6 => {
-                    // INC: r[dst]++ (src ignored)
-                    r[dst] = r[dst].wrapping_add(1);
-                }
-                0x7 => {
-                    // DEC: r[dst]-- (src ignored)
-                    r[dst] = r[dst].wrapping_sub(1);
-                }
-                0x8 => {
-                    // JZ: if r[src] == 0, pc = r[dst] as usize
-                    if r[src] == 0 {
-                        pc = r[dst] as usize;
-                        continue;
-                    }
-                }
-                0x9 => {
-                    // JNZ: if r[src] != 0, pc = r[dst] as usize
-                    if r[src] != 0 {
-                        pc = r[dst] as usize;
-                        continue;
-                    }
-                }
-                0xA => {
-                    // COPY: tape[r[dst]] = tape[r[src]]
-                    let s = r[src] as usize % len;
-                    let d = r[dst] as usize % len;
-                    tape[d] = tape[s];
-                }
-                0xB => {
-                    // HALT
-                    break;
-                }
-                // 0xC-0xF: NOP
-                _ => {}
+            if !rig_step(&mut state, tape) {
+                break;
             }
-
-            pc += 1;
         }
 
         steps
@@ -190,11 +129,11 @@ impl Substrate for Rig {
         if len == 0 {
             return 0;
         }
-        let mut a = RigBattleState {
+        let mut a = RigState {
             pc: 0,
             r: [0, ps as u8, 0, 0],
         };
-        let mut b = RigBattleState {
+        let mut b = RigState {
             pc: ps,
             r: [ps as u8, 0, 0, 0],
         };
@@ -203,14 +142,14 @@ impl Substrate for Rig {
         let mut halted_b = false;
         while steps < step_limit && (!halted_a || !halted_b) {
             if !halted_a {
-                halted_a = !rig_battle_step(&mut a, tape);
+                halted_a = !rig_step(&mut a, tape);
                 steps += 1;
                 if steps >= step_limit {
                     break;
                 }
             }
             if !halted_b {
-                halted_b = !rig_battle_step(&mut b, tape);
+                halted_b = !rig_step(&mut b, tape);
                 steps += 1;
             }
         }

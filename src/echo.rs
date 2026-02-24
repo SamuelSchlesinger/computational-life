@@ -33,15 +33,15 @@ const SKIP_EQ: u8 = 0x0D;
 const GET_DELAY: u8 = 0x0E;
 const SET_RP: u8 = 0x0F;
 
-struct EchoBattleState {
+struct EchoState {
     pc: usize,
     rp: u8,
     delay: u8,
     acc: u8,
 }
 
-/// Execute one Echo instruction for a battle context. Returns true if still running.
-fn echo_battle_step(state: &mut EchoBattleState, tape: &mut [u8]) -> bool {
+/// Execute one Echo instruction. Returns true if still running.
+fn echo_step(state: &mut EchoState, tape: &mut [u8]) -> bool {
     let len = tape.len();
     if state.pc >= len {
         return false;
@@ -158,116 +158,19 @@ impl Substrate for Echo {
             return 0;
         }
 
-        let mut pc: usize = 0;
-        let mut rp: u8 = 0;
-        let mut delay: u8 = (len / 2) as u8;
-        let mut acc: u8 = 0;
-        let mut steps: usize = 0;
+        let mut state = EchoState {
+            pc: 0,
+            rp: 0,
+            delay: (len / 2) as u8,
+            acc: 0,
+        };
+        let mut steps = 0;
 
-        while pc < len && steps < step_limit {
+        while state.pc < len && steps < step_limit {
             steps += 1;
-            let wp = rp.wrapping_add(delay);
-
-            match tape[pc] {
-                HALT => break,
-                ECHO => {
-                    let src = rp as usize % len;
-                    let dst = wp as usize % len;
-                    tape[dst] = tape[src];
-                    rp = rp.wrapping_add(1);
-                }
-                LOAD => {
-                    acc = tape[rp as usize % len];
-                    rp = rp.wrapping_add(1);
-                }
-                STORE => {
-                    tape[wp as usize % len] = acc;
-                }
-                SKIP => {
-                    rp = rp.wrapping_add(1);
-                }
-                SET_DELAY => {
-                    if pc + 1 >= len {
-                        break;
-                    }
-                    delay = tape[pc + 1];
-                    pc += 2;
-                    continue;
-                }
-                INC => {
-                    acc = acc.wrapping_add(1);
-                }
-                DEC => {
-                    acc = acc.wrapping_sub(1);
-                }
-                XOR => {
-                    acc ^= tape[rp as usize % len];
-                }
-                ADD => {
-                    acc = acc.wrapping_add(tape[rp as usize % len]);
-                    rp = rp.wrapping_add(1);
-                }
-                JMP_REL => {
-                    if pc + 1 >= len {
-                        break;
-                    }
-                    let offset = tape[pc + 1] as i8;
-                    let new_pc = pc as isize + 2 + offset as isize;
-                    if new_pc < 0 {
-                        break;
-                    }
-                    pc = new_pc as usize;
-                    continue;
-                }
-                JZ => {
-                    if pc + 1 >= len {
-                        break;
-                    }
-                    if acc == 0 {
-                        let offset = tape[pc + 1] as i8;
-                        let new_pc = pc as isize + 2 + offset as isize;
-                        if new_pc < 0 {
-                            break;
-                        }
-                        pc = new_pc as usize;
-                        continue;
-                    }
-                    pc += 2;
-                    continue;
-                }
-                JNZ => {
-                    if pc + 1 >= len {
-                        break;
-                    }
-                    if acc != 0 {
-                        let offset = tape[pc + 1] as i8;
-                        let new_pc = pc as isize + 2 + offset as isize;
-                        if new_pc < 0 {
-                            break;
-                        }
-                        pc = new_pc as usize;
-                        continue;
-                    }
-                    pc += 2;
-                    continue;
-                }
-                SKIP_EQ => {
-                    let r = tape[rp as usize % len];
-                    let w = tape[wp as usize % len];
-                    if r == w {
-                        pc += 2; // skip next instruction
-                        continue;
-                    }
-                }
-                GET_DELAY => {
-                    acc = delay;
-                }
-                SET_RP => {
-                    rp = acc;
-                }
-                _ => {} // NOP (0x10-0xFF)
+            if !echo_step(&mut state, tape) {
+                break;
             }
-            pc += 1;
         }
 
         steps
@@ -278,13 +181,13 @@ impl Substrate for Echo {
         if len == 0 {
             return 0;
         }
-        let mut a = EchoBattleState {
+        let mut a = EchoState {
             pc: 0,
             rp: 0,
             delay: ps as u8,
             acc: 0,
         };
-        let mut b = EchoBattleState {
+        let mut b = EchoState {
             pc: ps,
             rp: ps as u8,
             delay: ps as u8,
@@ -295,14 +198,14 @@ impl Substrate for Echo {
         let mut halted_b = false;
         while steps < step_limit && (!halted_a || !halted_b) {
             if !halted_a {
-                halted_a = !echo_battle_step(&mut a, tape);
+                halted_a = !echo_step(&mut a, tape);
                 steps += 1;
                 if steps >= step_limit {
                     break;
                 }
             }
             if !halted_b {
-                halted_b = !echo_battle_step(&mut b, tape);
+                halted_b = !echo_step(&mut b, tape);
                 steps += 1;
             }
         }

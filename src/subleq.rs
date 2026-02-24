@@ -19,15 +19,15 @@ use crate::substrate::Substrate;
 /// does not spontaneously emerge from random initialization.
 pub struct Subleq;
 
-struct SubleqBattleState {
+struct SubleqState {
     pc: usize,
 }
 
-fn subleq_battle_init(_tape_len: usize, start_pc: usize) -> SubleqBattleState {
-    SubleqBattleState { pc: start_pc }
+fn subleq_init(_tape_len: usize, start_pc: usize) -> SubleqState {
+    SubleqState { pc: start_pc }
 }
 
-fn subleq_battle_step(state: &mut SubleqBattleState, tape: &mut [u8]) -> bool {
+fn subleq_step(state: &mut SubleqState, tape: &mut [u8]) -> bool {
     let len = tape.len();
     if state.pc + 2 >= len {
         return false;
@@ -54,23 +54,13 @@ impl Substrate for Subleq {
             return 0;
         }
 
-        let mut pc: usize = 0;
-        let mut steps: usize = 0;
+        let mut state = SubleqState { pc: 0 };
+        let mut steps = 0;
 
-        while pc + 2 < len && steps < step_limit {
+        while state.pc + 2 < len && steps < step_limit {
             steps += 1;
-
-            let a = tape[pc] as usize % len;
-            let b = tape[pc + 1] as usize % len;
-
-            tape[a] = tape[a].wrapping_sub(tape[b]);
-
-            if (tape[a] as i8) <= 0 {
-                // Branch target is read AFTER the subtraction, matching the
-                // reference implementation. This matters when a == pc + 2.
-                pc = tape[pc + 2] as usize;
-            } else {
-                pc += 3;
+            if !subleq_step(&mut state, tape) {
+                break;
             }
         }
 
@@ -82,21 +72,21 @@ impl Substrate for Subleq {
         if len < 3 {
             return 0;
         }
-        let mut a = subleq_battle_init(len, 0);
-        let mut b = subleq_battle_init(len, ps);
+        let mut a = subleq_init(len, 0);
+        let mut b = subleq_init(len, ps);
         let mut steps = 0;
         let mut halted_a = false;
         let mut halted_b = false;
         while steps < step_limit && (!halted_a || !halted_b) {
             if !halted_a {
-                halted_a = !subleq_battle_step(&mut a, tape);
+                halted_a = !subleq_step(&mut a, tape);
                 steps += 1;
                 if steps >= step_limit {
                     break;
                 }
             }
             if !halted_b {
-                halted_b = !subleq_battle_step(&mut b, tape);
+                halted_b = !subleq_step(&mut b, tape);
                 steps += 1;
             }
         }
@@ -148,15 +138,15 @@ impl Substrate for Subleq {
 /// than standard SUBLEQ (60 bytes).
 pub struct Rsubleq4;
 
-struct Rsubleq4BattleState {
+struct Rsubleq4State {
     pc: usize,
 }
 
-fn rsubleq4_battle_init(_tape_len: usize, start_pc: usize) -> Rsubleq4BattleState {
-    Rsubleq4BattleState { pc: start_pc }
+fn rsubleq4_init(_tape_len: usize, start_pc: usize) -> Rsubleq4State {
+    Rsubleq4State { pc: start_pc }
 }
 
-fn rsubleq4_battle_step(state: &mut Rsubleq4BattleState, tape: &mut [u8]) -> bool {
+fn rsubleq4_step(state: &mut Rsubleq4State, tape: &mut [u8]) -> bool {
     let len = tape.len();
     if state.pc + 3 >= len {
         return false;
@@ -216,34 +206,13 @@ impl Substrate for Rsubleq4 {
             return 0;
         }
 
-        let mut pc: usize = 0;
-        let mut steps: usize = 0;
+        let mut state = Rsubleq4State { pc: 0 };
+        let mut steps = 0;
 
-        while pc + 3 < len && steps < step_limit {
+        while state.pc + 3 < len && steps < step_limit {
             steps += 1;
-
-            // Data offsets are unsigned.
-            let a = tape[pc] as usize;
-            let b = tape[pc + 1] as usize;
-            let c = tape[pc + 2] as usize;
-
-            let addr_a = (pc + a) % len;
-            let addr_b = (pc + b) % len;
-            let addr_c = (pc + c) % len;
-
-            tape[addr_a] = tape[addr_b].wrapping_sub(tape[addr_c]);
-
-            if (tape[addr_a] as i8) <= 0 {
-                // Branch offset is read AFTER the subtraction, matching the
-                // reference implementation. This matters when addr_a == pc + 3.
-                let d = tape[pc + 3] as i8;
-                let new_pc = pc as isize + d as isize;
-                if new_pc < 0 {
-                    break;
-                }
-                pc = new_pc as usize;
-            } else {
-                pc += 4;
+            if !rsubleq4_step(&mut state, tape) {
+                break;
             }
         }
 
@@ -255,21 +224,21 @@ impl Substrate for Rsubleq4 {
         if len < 4 {
             return 0;
         }
-        let mut a = rsubleq4_battle_init(len, 0);
-        let mut b = rsubleq4_battle_init(len, ps);
+        let mut a = rsubleq4_init(len, 0);
+        let mut b = rsubleq4_init(len, ps);
         let mut steps = 0;
         let mut halted_a = false;
         let mut halted_b = false;
         while steps < step_limit && (!halted_a || !halted_b) {
             if !halted_a {
-                halted_a = !rsubleq4_battle_step(&mut a, tape);
+                halted_a = !rsubleq4_step(&mut a, tape);
                 steps += 1;
                 if steps >= step_limit {
                     break;
                 }
             }
             if !halted_b {
-                halted_b = !rsubleq4_battle_step(&mut b, tape);
+                halted_b = !rsubleq4_step(&mut b, tape);
                 steps += 1;
             }
         }

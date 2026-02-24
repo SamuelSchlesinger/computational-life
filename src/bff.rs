@@ -25,23 +25,23 @@ const COMMA: u8 = b',';
 const LBRACKET: u8 = b'[';
 const RBRACKET: u8 = b']';
 
-struct BffBattleState {
+struct BffState {
     ip: usize,
     head0: u8,
     head1: u8,
 }
 
-fn bff_battle_init(tape_len: usize, start_ip: usize) -> BffBattleState {
+fn bff_init(tape_len: usize, start_ip: usize) -> BffState {
     let _ = tape_len;
-    BffBattleState {
+    BffState {
         ip: start_ip,
         head0: start_ip as u8,
         head1: start_ip as u8,
     }
 }
 
-/// Execute one BFF instruction for a battle context. Returns true if still running.
-fn bff_battle_step(state: &mut BffBattleState, tape: &mut [u8]) -> bool {
+/// Execute one BFF instruction. Returns true if still running.
+fn bff_step(state: &mut BffState, tape: &mut [u8]) -> bool {
     let len = tape.len();
     if state.ip >= len {
         return false;
@@ -138,97 +138,18 @@ impl Substrate for Bff {
             return 0;
         }
 
-        let mut ip: usize = 0;
-        let mut head0: u8 = 0;
-        let mut head1: u8 = 0;
-        let mut steps: usize = 0;
+        let mut state = BffState {
+            ip: 0,
+            head0: 0,
+            head1: 0,
+        };
+        let mut steps = 0;
 
-        while ip < len && steps < step_limit {
+        while state.ip < len && steps < step_limit {
             steps += 1;
-            match tape[ip] {
-                LESS => head0 = head0.wrapping_sub(1),
-                GREATER => head0 = head0.wrapping_add(1),
-                LBRACE => head1 = head1.wrapping_sub(1),
-                RBRACE => head1 = head1.wrapping_add(1),
-                MINUS => {
-                    let idx = head0 as usize % len;
-                    tape[idx] = tape[idx].wrapping_sub(1);
-                }
-                PLUS => {
-                    let idx = head0 as usize % len;
-                    tape[idx] = tape[idx].wrapping_add(1);
-                }
-                DOT => {
-                    let src = head0 as usize % len;
-                    let dst = head1 as usize % len;
-                    tape[dst] = tape[src];
-                }
-                COMMA => {
-                    let dst = head0 as usize % len;
-                    let src = head1 as usize % len;
-                    tape[dst] = tape[src];
-                }
-                LBRACKET => {
-                    let idx = head0 as usize % len;
-                    if tape[idx] == 0 {
-                        // Scan forward for matching ] on the current tape.
-                        let mut depth: usize = 1;
-                        let mut scan = ip + 1;
-                        while scan < len && depth > 0 {
-                            if tape[scan] == LBRACKET {
-                                depth += 1;
-                            } else if tape[scan] == RBRACKET {
-                                depth -= 1;
-                            }
-                            scan += 1;
-                        }
-                        if depth > 0 {
-                            // Unmatched bracket: terminate.
-                            break;
-                        }
-                        // scan is now one past the matching ].
-                        // Set ip so that after ip += 1 at the bottom, we land
-                        // at scan (one past ]). So ip = scan - 1.
-                        ip = scan - 1;
-                    }
-                }
-                RBRACKET => {
-                    let idx = head0 as usize % len;
-                    if tape[idx] != 0 {
-                        // Scan backward for matching [ on the current tape.
-                        if ip == 0 {
-                            // No room to scan: unmatched.
-                            break;
-                        }
-                        let mut depth: usize = 1;
-                        let mut scan = ip - 1;
-                        loop {
-                            if tape[scan] == RBRACKET {
-                                depth += 1;
-                            } else if tape[scan] == LBRACKET {
-                                depth -= 1;
-                            }
-                            if depth == 0 {
-                                break;
-                            }
-                            if scan == 0 {
-                                break;
-                            }
-                            scan -= 1;
-                        }
-                        if depth > 0 {
-                            // Unmatched bracket: terminate.
-                            break;
-                        }
-                        // scan is at the matching [. Set ip so that after
-                        // ip += 1, we land at [ + 1 (first instruction in
-                        // the loop body), matching the reference behavior.
-                        ip = scan;
-                    }
-                }
-                _ => {} // no-op
+            if !bff_step(&mut state, tape) {
+                break;
             }
-            ip += 1;
         }
 
         steps
@@ -239,21 +160,21 @@ impl Substrate for Bff {
         if len == 0 {
             return 0;
         }
-        let mut a = bff_battle_init(len, 0);
-        let mut b = bff_battle_init(len, ps);
+        let mut a = bff_init(len, 0);
+        let mut b = bff_init(len, ps);
         let mut steps = 0;
         let mut halted_a = false;
         let mut halted_b = false;
         while steps < step_limit && (!halted_a || !halted_b) {
             if !halted_a {
-                halted_a = !bff_battle_step(&mut a, tape);
+                halted_a = !bff_step(&mut a, tape);
                 steps += 1;
                 if steps >= step_limit {
                     break;
                 }
             }
             if !halted_b {
-                halted_b = !bff_battle_step(&mut b, tape);
+                halted_b = !bff_step(&mut b, tape);
                 steps += 1;
             }
         }

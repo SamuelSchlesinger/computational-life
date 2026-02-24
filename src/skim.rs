@@ -18,14 +18,14 @@ use crate::substrate::Substrate;
 /// All pointer arithmetic wraps modulo tape length.
 pub struct Skim;
 
-struct SkimBattleState {
+struct SkimState {
     pc: usize,
     acc: u8,
     wp: u8,
 }
 
-/// Execute one Skim instruction for a battle context. Returns true if still running.
-fn skim_battle_step(state: &mut SkimBattleState, tape: &mut [u8]) -> bool {
+/// Execute one Skim instruction. Returns true if still running.
+fn skim_step(state: &mut SkimState, tape: &mut [u8]) -> bool {
     let len = tape.len();
     let instr = tape[state.pc];
     let skip = (instr & 0x0F) as usize + 1;
@@ -105,81 +105,18 @@ impl Substrate for Skim {
             return 0;
         }
 
-        let mut pc: usize = 0;
-        let mut acc: u8 = 0;
-        let mut wp: u8 = (len / 2) as u8;
-        let mut steps: usize = 0;
+        let mut state = SkimState {
+            pc: 0,
+            acc: 0,
+            wp: (len / 2) as u8,
+        };
+        let mut steps = 0;
 
         while steps < step_limit {
             steps += 1;
-            let instr = tape[pc];
-            let skip = (instr & 0x0F) as usize + 1;
-
-            match instr >> 4 {
-                0x0 => {
-                    // LOAD: acc = tape[wp]
-                    acc = tape[wp as usize % len];
-                }
-                0x1 => {
-                    // STORE: tape[wp] = acc
-                    tape[wp as usize % len] = acc;
-                }
-                0x2 => {
-                    // COPY_FWD: tape[wp] = tape[pc]; wp++
-                    tape[wp as usize % len] = tape[pc];
-                    wp = wp.wrapping_add(1);
-                }
-                0x3 => {
-                    // INC: acc++
-                    acc = acc.wrapping_add(1);
-                }
-                0x4 => {
-                    // DEC: acc--
-                    acc = acc.wrapping_sub(1);
-                }
-                0x5 => {
-                    // XOR: acc ^= tape[wp]
-                    acc ^= tape[wp as usize % len];
-                }
-                0x6 => {
-                    // WP_INC: wp++
-                    wp = wp.wrapping_add(1);
-                }
-                0x7 => {
-                    // WP_DEC: wp--
-                    wp = wp.wrapping_sub(1);
-                }
-                0x8 => {
-                    // SET_WP: wp = acc
-                    wp = acc;
-                }
-                0x9 => {
-                    // GET_WP: acc = wp
-                    acc = wp;
-                }
-                0xA => {
-                    // SKZ: if acc == 0, use normal skip; else skip 1
-                    if acc != 0 {
-                        pc = (pc + 1) % len;
-                        continue;
-                    }
-                }
-                0xB => {
-                    // SKNZ: if acc != 0, use normal skip; else skip 1
-                    if acc == 0 {
-                        pc = (pc + 1) % len;
-                        continue;
-                    }
-                }
-                0xC => {
-                    // HALT
-                    break;
-                }
-                // 0xD, 0xE, 0xF => NOP
-                _ => {}
+            if !skim_step(&mut state, tape) {
+                break;
             }
-
-            pc = (pc + skip) % len;
         }
 
         steps
@@ -190,12 +127,12 @@ impl Substrate for Skim {
         if len == 0 {
             return 0;
         }
-        let mut a = SkimBattleState {
+        let mut a = SkimState {
             pc: 0,
             acc: 0,
             wp: ps as u8,
         };
-        let mut b = SkimBattleState {
+        let mut b = SkimState {
             pc: ps,
             acc: 0,
             wp: 0,
@@ -205,14 +142,14 @@ impl Substrate for Skim {
         let mut halted_b = false;
         while steps < step_limit && (!halted_a || !halted_b) {
             if !halted_a {
-                halted_a = !skim_battle_step(&mut a, tape);
+                halted_a = !skim_step(&mut a, tape);
                 steps += 1;
                 if steps >= step_limit {
                     break;
                 }
             }
             if !halted_b {
-                halted_b = !skim_battle_step(&mut b, tape);
+                halted_b = !skim_step(&mut b, tape);
                 steps += 1;
             }
         }

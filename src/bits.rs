@@ -47,15 +47,15 @@ fn write_bit(tape: &mut [u8], bit_pos: usize, val: u8) {
     }
 }
 
-struct BitsBattleState {
+struct BitsState {
     pc: usize,
     bp: usize,
     wp: usize,
     carry: u8,
 }
 
-/// Execute one Bits instruction for a battle context. Returns true if still running.
-fn bits_battle_step(state: &mut BitsBattleState, tape: &mut [u8]) -> bool {
+/// Execute one Bits instruction. Returns true if still running.
+fn bits_step(state: &mut BitsState, tape: &mut [u8]) -> bool {
     let len = tape.len();
     if state.pc >= len {
         return false;
@@ -176,118 +176,19 @@ impl Substrate for Bits {
         }
 
         let tb = total_bits(tape);
-        let mut pc: usize = 0;
-        let mut bp: usize = 0;
-        let mut wp: usize = tb / 2;
-        let mut carry: u8 = 0;
-        let mut steps: usize = 0;
+        let mut state = BitsState {
+            pc: 0,
+            bp: 0,
+            wp: tb / 2,
+            carry: 0,
+        };
+        let mut steps = 0;
 
-        while pc < len && steps < step_limit {
+        while state.pc < len && steps < step_limit {
             steps += 1;
-            let instr = tape[pc];
-
-            match instr >> 4 {
-                0x0 => {
-                    // COPY_BIT: write_bit(wp, read_bit(bp)); bp++; wp++
-                    let bit = read_bit(tape, bp);
-                    write_bit(tape, wp, bit);
-                    bp = (bp + 1) % tb;
-                    wp = (wp + 1) % tb;
-                }
-                0x1 => {
-                    // SET_BIT: write 1 to wp; wp++
-                    write_bit(tape, wp, 1);
-                    wp = (wp + 1) % tb;
-                }
-                0x2 => {
-                    // CLR_BIT: write 0 to wp; wp++
-                    write_bit(tape, wp, 0);
-                    wp = (wp + 1) % tb;
-                }
-                0x3 => {
-                    // SKIP_BIT: bp++
-                    bp = (bp + 1) % tb;
-                }
-                0x4 => {
-                    // READ_CARRY: carry = read_bit(bp); bp++
-                    carry = read_bit(tape, bp);
-                    bp = (bp + 1) % tb;
-                }
-                0x5 => {
-                    // WRITE_CARRY: write carry to wp; wp++
-                    write_bit(tape, wp, carry);
-                    wp = (wp + 1) % tb;
-                }
-                0x6 => {
-                    // FLIP_CARRY: carry ^= 1
-                    carry ^= 1;
-                }
-                0x7 => {
-                    // AND_CARRY: carry &= read_bit(bp); bp++
-                    carry &= read_bit(tape, bp);
-                    bp = (bp + 1) % tb;
-                }
-                0x8 => {
-                    // OR_CARRY: carry |= read_bit(bp); bp++
-                    carry |= read_bit(tape, bp);
-                    bp = (bp + 1) % tb;
-                }
-                0x9 => {
-                    // XOR_CARRY: carry ^= read_bit(bp); bp++
-                    carry ^= read_bit(tape, bp);
-                    bp = (bp + 1) % tb;
-                }
-                0xA => {
-                    // JZ_CARRY: 2-byte instruction. If carry==0, relative jump.
-                    if pc + 1 >= len {
-                        break;
-                    }
-                    if carry == 0 {
-                        let offset = tape[pc + 1] as i8;
-                        let new_pc = pc as isize + 2 + offset as isize;
-                        if new_pc < 0 {
-                            break;
-                        }
-                        pc = new_pc as usize;
-                        continue;
-                    }
-                    pc += 2;
-                    continue;
-                }
-                0xB => {
-                    // JNZ_CARRY: 2-byte instruction. If carry!=0, relative jump.
-                    if pc + 1 >= len {
-                        break;
-                    }
-                    if carry != 0 {
-                        let offset = tape[pc + 1] as i8;
-                        let new_pc = pc as isize + 2 + offset as isize;
-                        if new_pc < 0 {
-                            break;
-                        }
-                        pc = new_pc as usize;
-                        continue;
-                    }
-                    pc += 2;
-                    continue;
-                }
-                0xC => {
-                    // BP_RESET: bp = 0
-                    bp = 0;
-                }
-                0xD => {
-                    // WP_RESET: wp = total_bits / 2
-                    wp = tb / 2;
-                }
-                0xE => {
-                    // HALT
-                    break;
-                }
-                // 0xF: NOP
-                _ => {}
+            if !bits_step(&mut state, tape) {
+                break;
             }
-
-            pc += 1;
         }
 
         steps
@@ -298,13 +199,13 @@ impl Substrate for Bits {
         if len == 0 {
             return 0;
         }
-        let mut a = BitsBattleState {
+        let mut a = BitsState {
             pc: 0,
             bp: 0,
             wp: ps * 8,
             carry: 0,
         };
-        let mut b = BitsBattleState {
+        let mut b = BitsState {
             pc: ps,
             bp: ps * 8,
             wp: 0,
@@ -315,14 +216,14 @@ impl Substrate for Bits {
         let mut halted_b = false;
         while steps < step_limit && (!halted_a || !halted_b) {
             if !halted_a {
-                halted_a = !bits_battle_step(&mut a, tape);
+                halted_a = !bits_step(&mut a, tape);
                 steps += 1;
                 if steps >= step_limit {
                     break;
                 }
             }
             if !halted_b {
-                halted_b = !bits_battle_step(&mut b, tape);
+                halted_b = !bits_step(&mut b, tape);
                 steps += 1;
             }
         }
