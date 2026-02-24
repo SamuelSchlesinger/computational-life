@@ -61,12 +61,22 @@ that replicators actually carry:
   more uniform compared to the random primordial soup, though the specific
   patterns vary.
 
-These are just a few of the available color modes — there are others in the
-viewer not shown here. They are all exploratory tools. We don't know many
-generalizable properties of replicators beyond the fact that they clearly
-reduce entropy and show emergent structure across all of these views. The point
-is to give you more angles to watch the dynamics unfold and form your own
-intuitions about what's happening.
+- **Byte Entropy** — the Shannon entropy of the byte distribution within each
+  program. Lower entropy means fewer distinct byte values dominate, which is
+  a hallmark of emerging structure.
+
+- **Zero Fraction** — the proportion of zero bytes in each program. Useful for
+  spotting sparse replicators and watching how the density of "empty" space
+  changes as evolution proceeds.
+
+- **Territorial Dominance** — highlights which replicator lineage controls each
+  region, making it easy to see territorial boundaries and competition between
+  distinct species.
+
+These are all exploratory tools. We don't know many generalizable properties of
+replicators beyond the fact that they clearly reduce entropy and show emergent
+structure across all of these views. The point is to give you more angles to
+watch the dynamics unfold and form your own intuitions about what's happening.
 
 ## Features
 
@@ -88,7 +98,8 @@ intuitions about what's happening.
   | **Uxn** | Stack machine (dual circular stacks) | ? bytes | Novel |
   | **6502** | MOS 6502 (real CPU, NMOS variant) | ? bytes | Novel |
 
-- **Multiple topologies**: flat grid, icosphere, torus, and hamster tunnel —
+- **Multiple topologies**: flat grid, sphere, torus, cylinder, Klein bottle,
+  heightmap, trefoil knot, hamster tunnel, and arbitrary OBJ files —
   all with geodesic neighborhoods
 - **Live 3D visualization** via Bevy with real-time metrics (high-order entropy,
   unique program count, zero-byte count) and multiple color modes
