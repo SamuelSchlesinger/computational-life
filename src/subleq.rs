@@ -19,6 +19,34 @@ use crate::substrate::Substrate;
 /// does not spontaneously emerge from random initialization.
 pub struct Subleq;
 
+struct SubleqBattleState {
+    pc: usize,
+}
+
+fn subleq_battle_init(_tape_len: usize, start_pc: usize) -> SubleqBattleState {
+    SubleqBattleState { pc: start_pc }
+}
+
+fn subleq_battle_step(state: &mut SubleqBattleState, tape: &mut [u8]) -> bool {
+    let len = tape.len();
+    if state.pc + 2 >= len {
+        return false;
+    }
+
+    let a = tape[state.pc] as usize % len;
+    let b = tape[state.pc + 1] as usize % len;
+
+    tape[a] = tape[a].wrapping_sub(tape[b]);
+
+    if (tape[a] as i8) <= 0 {
+        state.pc = tape[state.pc + 2] as usize;
+    } else {
+        state.pc += 3;
+    }
+
+    true
+}
+
 impl Substrate for Subleq {
     fn execute(tape: &mut [u8], step_limit: usize) -> usize {
         let len = tape.len();
@@ -46,6 +74,32 @@ impl Substrate for Subleq {
             }
         }
 
+        steps
+    }
+
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        let len = tape.len();
+        if len < 3 {
+            return 0;
+        }
+        let mut a = subleq_battle_init(len, 0);
+        let mut b = subleq_battle_init(len, ps);
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                halted_a = !subleq_battle_step(&mut a, tape);
+                steps += 1;
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                halted_b = !subleq_battle_step(&mut b, tape);
+                steps += 1;
+            }
+        }
         steps
     }
 
@@ -93,6 +147,45 @@ impl Substrate for Subleq {
 /// This variant admits a significantly shorter self-replicator (25 bytes)
 /// than standard SUBLEQ (60 bytes).
 pub struct Rsubleq4;
+
+struct Rsubleq4BattleState {
+    pc: usize,
+}
+
+fn rsubleq4_battle_init(_tape_len: usize, start_pc: usize) -> Rsubleq4BattleState {
+    Rsubleq4BattleState { pc: start_pc }
+}
+
+fn rsubleq4_battle_step(state: &mut Rsubleq4BattleState, tape: &mut [u8]) -> bool {
+    let len = tape.len();
+    if state.pc + 3 >= len {
+        return false;
+    }
+
+    // Data offsets are unsigned.
+    let a = tape[state.pc] as usize;
+    let b = tape[state.pc + 1] as usize;
+    let c = tape[state.pc + 2] as usize;
+
+    let addr_a = (state.pc + a) % len;
+    let addr_b = (state.pc + b) % len;
+    let addr_c = (state.pc + c) % len;
+
+    tape[addr_a] = tape[addr_b].wrapping_sub(tape[addr_c]);
+
+    if (tape[addr_a] as i8) <= 0 {
+        let d = tape[state.pc + 3] as i8;
+        let new_pc = state.pc as isize + d as isize;
+        if new_pc < 0 {
+            return false;
+        }
+        state.pc = new_pc as usize;
+    } else {
+        state.pc += 4;
+    }
+
+    true
+}
 
 impl Substrate for Rsubleq4 {
     fn disassemble(tape: &[u8]) -> String {
@@ -154,6 +247,32 @@ impl Substrate for Rsubleq4 {
             }
         }
 
+        steps
+    }
+
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        let len = tape.len();
+        if len < 4 {
+            return 0;
+        }
+        let mut a = rsubleq4_battle_init(len, 0);
+        let mut b = rsubleq4_battle_init(len, ps);
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                halted_a = !rsubleq4_battle_step(&mut a, tape);
+                steps += 1;
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                halted_b = !rsubleq4_battle_step(&mut b, tape);
+                steps += 1;
+            }
+        }
         steps
     }
 

@@ -25,6 +25,112 @@ const COMMA: u8 = b',';
 const LBRACKET: u8 = b'[';
 const RBRACKET: u8 = b']';
 
+struct BffBattleState {
+    ip: usize,
+    head0: u8,
+    head1: u8,
+}
+
+fn bff_battle_init(tape_len: usize, start_ip: usize) -> BffBattleState {
+    let _ = tape_len;
+    BffBattleState {
+        ip: start_ip,
+        head0: start_ip as u8,
+        head1: start_ip as u8,
+    }
+}
+
+/// Execute one BFF instruction for a battle context. Returns true if still running.
+fn bff_battle_step(state: &mut BffBattleState, tape: &mut [u8]) -> bool {
+    let len = tape.len();
+    if state.ip >= len {
+        return false;
+    }
+    match tape[state.ip] {
+        LESS => state.head0 = state.head0.wrapping_sub(1),
+        GREATER => state.head0 = state.head0.wrapping_add(1),
+        LBRACE => state.head1 = state.head1.wrapping_sub(1),
+        RBRACE => state.head1 = state.head1.wrapping_add(1),
+        MINUS => {
+            let idx = state.head0 as usize % len;
+            tape[idx] = tape[idx].wrapping_sub(1);
+        }
+        PLUS => {
+            let idx = state.head0 as usize % len;
+            tape[idx] = tape[idx].wrapping_add(1);
+        }
+        DOT => {
+            let src = state.head0 as usize % len;
+            let dst = state.head1 as usize % len;
+            tape[dst] = tape[src];
+        }
+        COMMA => {
+            let dst = state.head0 as usize % len;
+            let src = state.head1 as usize % len;
+            tape[dst] = tape[src];
+        }
+        LBRACKET => {
+            let idx = state.head0 as usize % len;
+            if tape[idx] == 0 {
+                // Scan forward for matching ] on the current tape.
+                let mut depth: usize = 1;
+                let mut scan = state.ip + 1;
+                while scan < len && depth > 0 {
+                    if tape[scan] == LBRACKET {
+                        depth += 1;
+                    } else if tape[scan] == RBRACKET {
+                        depth -= 1;
+                    }
+                    scan += 1;
+                }
+                if depth > 0 {
+                    // Unmatched bracket: halt this context.
+                    return false;
+                }
+                // scan is now one past the matching ].
+                // Set ip so that after ip += 1 below, we land at scan.
+                state.ip = scan - 1;
+            }
+        }
+        RBRACKET => {
+            let idx = state.head0 as usize % len;
+            if tape[idx] != 0 {
+                // Scan backward for matching [ on the current tape.
+                if state.ip == 0 {
+                    // No room to scan: unmatched.
+                    return false;
+                }
+                let mut depth: usize = 1;
+                let mut scan = state.ip - 1;
+                loop {
+                    if tape[scan] == RBRACKET {
+                        depth += 1;
+                    } else if tape[scan] == LBRACKET {
+                        depth -= 1;
+                    }
+                    if depth == 0 {
+                        break;
+                    }
+                    if scan == 0 {
+                        break;
+                    }
+                    scan -= 1;
+                }
+                if depth > 0 {
+                    // Unmatched bracket: halt this context.
+                    return false;
+                }
+                // scan is at the matching [. Set ip so that after
+                // ip += 1, we land at [ + 1.
+                state.ip = scan;
+            }
+        }
+        _ => {} // no-op
+    }
+    state.ip += 1;
+    true
+}
+
 impl Substrate for Bff {
     fn execute(tape: &mut [u8], step_limit: usize) -> usize {
         let len = tape.len();
@@ -125,6 +231,32 @@ impl Substrate for Bff {
             ip += 1;
         }
 
+        steps
+    }
+
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        let len = tape.len();
+        if len == 0 {
+            return 0;
+        }
+        let mut a = bff_battle_init(len, 0);
+        let mut b = bff_battle_init(len, ps);
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                halted_a = !bff_battle_step(&mut a, tape);
+                steps += 1;
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                halted_b = !bff_battle_step(&mut b, tape);
+                steps += 1;
+            }
+        }
         steps
     }
 

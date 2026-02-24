@@ -33,6 +33,124 @@ const SET_TAIL: u8 = 0x0D;
 const GET_HEAD: u8 = 0x0E;
 const GET_TAIL: u8 = 0x0F;
 
+struct QopBattleState {
+    pc: usize,
+    head: u8,
+    tail: u8,
+    acc: u8,
+}
+
+fn qop_battle_init(tape_len: usize, start_pc: usize) -> QopBattleState {
+    let _ = tape_len;
+    QopBattleState {
+        pc: start_pc,
+        head: 0,
+        tail: 0,
+        acc: 0,
+    }
+}
+
+/// Execute one Qop instruction for a battle context. Returns true if still running.
+fn qop_battle_step(state: &mut QopBattleState, tape: &mut [u8]) -> bool {
+    let len = tape.len();
+    if state.pc >= len {
+        return false;
+    }
+    match tape[state.pc] {
+        HALT => return false,
+        PASS => {
+            let src = state.head as usize % len;
+            let dst = state.tail as usize % len;
+            tape[dst] = tape[src];
+            state.head = state.head.wrapping_add(1);
+            state.tail = state.tail.wrapping_add(1);
+        }
+        EAT => {
+            state.acc = tape[state.head as usize % len];
+            state.head = state.head.wrapping_add(1);
+        }
+        SPIT => {
+            tape[state.tail as usize % len] = state.acc;
+            state.tail = state.tail.wrapping_add(1);
+        }
+        SKIP => {
+            state.head = state.head.wrapping_add(1);
+        }
+        GAP => {
+            tape[state.tail as usize % len] = 0;
+            state.tail = state.tail.wrapping_add(1);
+        }
+        INC => {
+            state.acc = state.acc.wrapping_add(1);
+        }
+        DEC => {
+            state.acc = state.acc.wrapping_sub(1);
+        }
+        XOR => {
+            state.acc ^= tape[state.head as usize % len];
+        }
+        JMP_REL => {
+            if state.pc + 1 >= len {
+                return false;
+            }
+            let offset = tape[state.pc + 1] as i8;
+            let new_pc = state.pc as isize + 2 + offset as isize;
+            if new_pc < 0 {
+                return false;
+            }
+            state.pc = new_pc as usize;
+            return true;
+        }
+        JZ => {
+            if state.pc + 1 >= len {
+                return false;
+            }
+            if state.acc == 0 {
+                let offset = tape[state.pc + 1] as i8;
+                let new_pc = state.pc as isize + 2 + offset as isize;
+                if new_pc < 0 {
+                    return false;
+                }
+                state.pc = new_pc as usize;
+                return true;
+            }
+            state.pc += 2;
+            return true;
+        }
+        JNZ => {
+            if state.pc + 1 >= len {
+                return false;
+            }
+            if state.acc != 0 {
+                let offset = tape[state.pc + 1] as i8;
+                let new_pc = state.pc as isize + 2 + offset as isize;
+                if new_pc < 0 {
+                    return false;
+                }
+                state.pc = new_pc as usize;
+                return true;
+            }
+            state.pc += 2;
+            return true;
+        }
+        SET_HEAD => {
+            state.head = state.acc;
+        }
+        SET_TAIL => {
+            state.tail = state.acc;
+        }
+        GET_HEAD => {
+            state.acc = state.head;
+        }
+        GET_TAIL => {
+            state.acc = state.tail;
+        }
+        _ => {} // NOP (0x10-0xFF)
+    }
+    state.pc += 1;
+    true
+}
+
 impl Substrate for Qop {
     fn execute(tape: &mut [u8], step_limit: usize) -> usize {
         let len = tape.len();
@@ -142,6 +260,34 @@ impl Substrate for Qop {
             pc += 1;
         }
 
+        steps
+    }
+
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        let len = tape.len();
+        if len == 0 {
+            return 0;
+        }
+        let mut a = qop_battle_init(len, 0);
+        a.tail = ps as u8;
+        let mut b = qop_battle_init(len, ps);
+        b.head = ps as u8;
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                halted_a = !qop_battle_step(&mut a, tape);
+                steps += 1;
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                halted_b = !qop_battle_step(&mut b, tape);
+                steps += 1;
+            }
+        }
         steps
     }
 

@@ -47,6 +47,127 @@ fn write_bit(tape: &mut [u8], bit_pos: usize, val: u8) {
     }
 }
 
+struct BitsBattleState {
+    pc: usize,
+    bp: usize,
+    wp: usize,
+    carry: u8,
+}
+
+/// Execute one Bits instruction for a battle context. Returns true if still running.
+fn bits_battle_step(state: &mut BitsBattleState, tape: &mut [u8]) -> bool {
+    let len = tape.len();
+    if state.pc >= len {
+        return false;
+    }
+    let tb = total_bits(tape);
+    let instr = tape[state.pc];
+
+    match instr >> 4 {
+        0x0 => {
+            // COPY_BIT
+            let bit = read_bit(tape, state.bp);
+            write_bit(tape, state.wp, bit);
+            state.bp = (state.bp + 1) % tb;
+            state.wp = (state.wp + 1) % tb;
+        }
+        0x1 => {
+            // SET_BIT
+            write_bit(tape, state.wp, 1);
+            state.wp = (state.wp + 1) % tb;
+        }
+        0x2 => {
+            // CLR_BIT
+            write_bit(tape, state.wp, 0);
+            state.wp = (state.wp + 1) % tb;
+        }
+        0x3 => {
+            // SKIP_BIT
+            state.bp = (state.bp + 1) % tb;
+        }
+        0x4 => {
+            // READ_CARRY
+            state.carry = read_bit(tape, state.bp);
+            state.bp = (state.bp + 1) % tb;
+        }
+        0x5 => {
+            // WRITE_CARRY
+            write_bit(tape, state.wp, state.carry);
+            state.wp = (state.wp + 1) % tb;
+        }
+        0x6 => {
+            // FLIP_CARRY
+            state.carry ^= 1;
+        }
+        0x7 => {
+            // AND_CARRY
+            state.carry &= read_bit(tape, state.bp);
+            state.bp = (state.bp + 1) % tb;
+        }
+        0x8 => {
+            // OR_CARRY
+            state.carry |= read_bit(tape, state.bp);
+            state.bp = (state.bp + 1) % tb;
+        }
+        0x9 => {
+            // XOR_CARRY
+            state.carry ^= read_bit(tape, state.bp);
+            state.bp = (state.bp + 1) % tb;
+        }
+        0xA => {
+            // JZ_CARRY
+            if state.pc + 1 >= len {
+                return false;
+            }
+            if state.carry == 0 {
+                let offset = tape[state.pc + 1] as i8;
+                let new_pc = state.pc as isize + 2 + offset as isize;
+                if new_pc < 0 {
+                    return false;
+                }
+                state.pc = new_pc as usize;
+                return true;
+            }
+            state.pc += 2;
+            return true;
+        }
+        0xB => {
+            // JNZ_CARRY
+            if state.pc + 1 >= len {
+                return false;
+            }
+            if state.carry != 0 {
+                let offset = tape[state.pc + 1] as i8;
+                let new_pc = state.pc as isize + 2 + offset as isize;
+                if new_pc < 0 {
+                    return false;
+                }
+                state.pc = new_pc as usize;
+                return true;
+            }
+            state.pc += 2;
+            return true;
+        }
+        0xC => {
+            // BP_RESET
+            state.bp = 0;
+        }
+        0xD => {
+            // WP_RESET
+            state.wp = total_bits(tape) / 2;
+        }
+        0xE => {
+            // HALT
+            return false;
+        }
+        // 0xF: NOP
+        _ => {}
+    }
+
+    state.pc += 1;
+    true
+}
+
 impl Substrate for Bits {
     fn execute(tape: &mut [u8], step_limit: usize) -> usize {
         let len = tape.len();
@@ -169,6 +290,42 @@ impl Substrate for Bits {
             pc += 1;
         }
 
+        steps
+    }
+
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        let len = tape.len();
+        if len == 0 {
+            return 0;
+        }
+        let mut a = BitsBattleState {
+            pc: 0,
+            bp: 0,
+            wp: ps * 8,
+            carry: 0,
+        };
+        let mut b = BitsBattleState {
+            pc: ps,
+            bp: ps * 8,
+            wp: 0,
+            carry: 0,
+        };
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                halted_a = !bits_battle_step(&mut a, tape);
+                steps += 1;
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                halted_b = !bits_battle_step(&mut b, tape);
+                steps += 1;
+            }
+        }
         steps
     }
 

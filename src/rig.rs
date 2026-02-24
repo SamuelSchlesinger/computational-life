@@ -21,6 +21,86 @@ use crate::substrate::Substrate;
 /// All arithmetic wraps modulo 256 (u8). All addresses wrap modulo tape length.
 pub struct Rig;
 
+struct RigBattleState {
+    pc: usize,
+    r: [u8; 4],
+}
+
+/// Execute one Rig instruction for a battle context. Returns true if still running.
+fn rig_battle_step(state: &mut RigBattleState, tape: &mut [u8]) -> bool {
+    let len = tape.len();
+    if state.pc >= len {
+        return false;
+    }
+    let instr = tape[state.pc];
+    let dst = ((instr >> 2) & 0x03) as usize;
+    let src = (instr & 0x03) as usize;
+
+    match instr >> 4 {
+        0x0 => {
+            // LOAD: r[dst] = tape[r[src]]
+            state.r[dst] = tape[state.r[src] as usize % len];
+        }
+        0x1 => {
+            // STORE: tape[r[dst]] = r[src]
+            tape[state.r[dst] as usize % len] = state.r[src];
+        }
+        0x2 => {
+            // MOV: r[dst] = r[src]
+            state.r[dst] = state.r[src];
+        }
+        0x3 => {
+            // ADD: r[dst] += r[src]
+            state.r[dst] = state.r[dst].wrapping_add(state.r[src]);
+        }
+        0x4 => {
+            // SUB: r[dst] -= r[src]
+            state.r[dst] = state.r[dst].wrapping_sub(state.r[src]);
+        }
+        0x5 => {
+            // XOR: r[dst] ^= r[src]
+            state.r[dst] ^= state.r[src];
+        }
+        0x6 => {
+            // INC: r[dst]++ (src ignored)
+            state.r[dst] = state.r[dst].wrapping_add(1);
+        }
+        0x7 => {
+            // DEC: r[dst]-- (src ignored)
+            state.r[dst] = state.r[dst].wrapping_sub(1);
+        }
+        0x8 => {
+            // JZ: if r[src] == 0, pc = r[dst] as usize
+            if state.r[src] == 0 {
+                state.pc = state.r[dst] as usize;
+                return true;
+            }
+        }
+        0x9 => {
+            // JNZ: if r[src] != 0, pc = r[dst] as usize
+            if state.r[src] != 0 {
+                state.pc = state.r[dst] as usize;
+                return true;
+            }
+        }
+        0xA => {
+            // COPY: tape[r[dst]] = tape[r[src]]
+            let s = state.r[src] as usize % len;
+            let d = state.r[dst] as usize % len;
+            tape[d] = tape[s];
+        }
+        0xB => {
+            // HALT
+            return false;
+        }
+        // 0xC-0xF: NOP
+        _ => {}
+    }
+
+    state.pc += 1;
+    true
+}
+
 impl Substrate for Rig {
     fn execute(tape: &mut [u8], step_limit: usize) -> usize {
         let len = tape.len();
@@ -102,6 +182,38 @@ impl Substrate for Rig {
             pc += 1;
         }
 
+        steps
+    }
+
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        let len = tape.len();
+        if len == 0 {
+            return 0;
+        }
+        let mut a = RigBattleState {
+            pc: 0,
+            r: [0, ps as u8, 0, 0],
+        };
+        let mut b = RigBattleState {
+            pc: ps,
+            r: [ps as u8, 0, 0, 0],
+        };
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                halted_a = !rig_battle_step(&mut a, tape);
+                steps += 1;
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                halted_b = !rig_battle_step(&mut b, tape);
+                steps += 1;
+            }
+        }
         steps
     }
 

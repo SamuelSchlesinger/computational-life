@@ -18,6 +18,86 @@ use crate::substrate::Substrate;
 /// All pointer arithmetic wraps modulo tape length.
 pub struct Skim;
 
+struct SkimBattleState {
+    pc: usize,
+    acc: u8,
+    wp: u8,
+}
+
+/// Execute one Skim instruction for a battle context. Returns true if still running.
+fn skim_battle_step(state: &mut SkimBattleState, tape: &mut [u8]) -> bool {
+    let len = tape.len();
+    let instr = tape[state.pc];
+    let skip = (instr & 0x0F) as usize + 1;
+
+    match instr >> 4 {
+        0x0 => {
+            // LOAD: acc = tape[wp]
+            state.acc = tape[state.wp as usize % len];
+        }
+        0x1 => {
+            // STORE: tape[wp] = acc
+            tape[state.wp as usize % len] = state.acc;
+        }
+        0x2 => {
+            // COPY_FWD: tape[wp] = tape[pc]; wp++
+            tape[state.wp as usize % len] = tape[state.pc];
+            state.wp = state.wp.wrapping_add(1);
+        }
+        0x3 => {
+            // INC: acc++
+            state.acc = state.acc.wrapping_add(1);
+        }
+        0x4 => {
+            // DEC: acc--
+            state.acc = state.acc.wrapping_sub(1);
+        }
+        0x5 => {
+            // XOR: acc ^= tape[wp]
+            state.acc ^= tape[state.wp as usize % len];
+        }
+        0x6 => {
+            // WP_INC: wp++
+            state.wp = state.wp.wrapping_add(1);
+        }
+        0x7 => {
+            // WP_DEC: wp--
+            state.wp = state.wp.wrapping_sub(1);
+        }
+        0x8 => {
+            // SET_WP: wp = acc
+            state.wp = state.acc;
+        }
+        0x9 => {
+            // GET_WP: acc = wp
+            state.acc = state.wp;
+        }
+        0xA => {
+            // SKZ: if acc == 0, use normal skip; else skip 1
+            if state.acc != 0 {
+                state.pc = (state.pc + 1) % len;
+                return true;
+            }
+        }
+        0xB => {
+            // SKNZ: if acc != 0, use normal skip; else skip 1
+            if state.acc == 0 {
+                state.pc = (state.pc + 1) % len;
+                return true;
+            }
+        }
+        0xC => {
+            // HALT
+            return false;
+        }
+        // 0xD, 0xE, 0xF => NOP
+        _ => {}
+    }
+
+    state.pc = (state.pc + skip) % len;
+    true
+}
+
 impl Substrate for Skim {
     fn execute(tape: &mut [u8], step_limit: usize) -> usize {
         let len = tape.len();
@@ -102,6 +182,40 @@ impl Substrate for Skim {
             pc = (pc + skip) % len;
         }
 
+        steps
+    }
+
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        let len = tape.len();
+        if len == 0 {
+            return 0;
+        }
+        let mut a = SkimBattleState {
+            pc: 0,
+            acc: 0,
+            wp: ps as u8,
+        };
+        let mut b = SkimBattleState {
+            pc: ps,
+            acc: 0,
+            wp: 0,
+        };
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                halted_a = !skim_battle_step(&mut a, tape);
+                steps += 1;
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                halted_b = !skim_battle_step(&mut b, tape);
+                steps += 1;
+            }
+        }
         steps
     }
 

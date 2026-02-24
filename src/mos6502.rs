@@ -69,6 +69,77 @@ impl Substrate for Mos6502 {
         steps
     }
 
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        if tape.is_empty() {
+            return 0;
+        }
+
+        // The mos6502 crate's CPU takes ownership of its Bus. To let two CPUs
+        // share the same tape we use a bus backed by a raw pointer. This is
+        // safe in practice because the two CPUs never execute concurrently —
+        // they alternate one step at a time.
+        struct SharedTapeBus {
+            tape_ptr: *mut u8,
+            tape_len: usize,
+        }
+
+        impl Bus for SharedTapeBus {
+            fn get_byte(&mut self, address: u16) -> u8 {
+                if self.tape_len == 0 {
+                    return 0;
+                }
+                unsafe { *self.tape_ptr.add(address as usize % self.tape_len) }
+            }
+            fn set_byte(&mut self, address: u16, value: u8) {
+                if self.tape_len == 0 {
+                    return;
+                }
+                unsafe {
+                    *self.tape_ptr.add(address as usize % self.tape_len) = value;
+                }
+            }
+        }
+
+        let tape_ptr = tape.as_mut_ptr();
+        let tape_len = tape.len();
+
+        let bus_a = SharedTapeBus { tape_ptr, tape_len };
+        let bus_b = SharedTapeBus { tape_ptr, tape_len };
+
+        let mut cpu_a = CPU::new(bus_a, Nmos6502);
+        cpu_a.reset();
+        cpu_a.registers.program_counter = 0;
+
+        let mut cpu_b = CPU::new(bus_b, Nmos6502);
+        cpu_b.reset();
+        cpu_b.registers.program_counter = ps as u16;
+
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                let ok = cpu_a.single_step();
+                steps += 1;
+                if !ok {
+                    halted_a = true;
+                }
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                let ok = cpu_b.single_step();
+                steps += 1;
+                if !ok {
+                    halted_b = true;
+                }
+            }
+        }
+        steps
+    }
+
     fn is_instruction(_byte: u8) -> bool {
         // NMOS 6502 decodes all 256 bytes (including illegal opcodes).
         true

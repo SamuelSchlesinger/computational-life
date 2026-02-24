@@ -33,6 +33,124 @@ const SKIP_EQ: u8 = 0x0D;
 const GET_DELAY: u8 = 0x0E;
 const SET_RP: u8 = 0x0F;
 
+struct EchoBattleState {
+    pc: usize,
+    rp: u8,
+    delay: u8,
+    acc: u8,
+}
+
+/// Execute one Echo instruction for a battle context. Returns true if still running.
+fn echo_battle_step(state: &mut EchoBattleState, tape: &mut [u8]) -> bool {
+    let len = tape.len();
+    if state.pc >= len {
+        return false;
+    }
+    let wp = state.rp.wrapping_add(state.delay);
+
+    match tape[state.pc] {
+        HALT => return false,
+        ECHO => {
+            let src = state.rp as usize % len;
+            let dst = wp as usize % len;
+            tape[dst] = tape[src];
+            state.rp = state.rp.wrapping_add(1);
+        }
+        LOAD => {
+            state.acc = tape[state.rp as usize % len];
+            state.rp = state.rp.wrapping_add(1);
+        }
+        STORE => {
+            tape[wp as usize % len] = state.acc;
+        }
+        SKIP => {
+            state.rp = state.rp.wrapping_add(1);
+        }
+        SET_DELAY => {
+            if state.pc + 1 >= len {
+                return false;
+            }
+            state.delay = tape[state.pc + 1];
+            state.pc += 2;
+            return true;
+        }
+        INC => {
+            state.acc = state.acc.wrapping_add(1);
+        }
+        DEC => {
+            state.acc = state.acc.wrapping_sub(1);
+        }
+        XOR => {
+            state.acc ^= tape[state.rp as usize % len];
+        }
+        ADD => {
+            state.acc = state.acc.wrapping_add(tape[state.rp as usize % len]);
+            state.rp = state.rp.wrapping_add(1);
+        }
+        JMP_REL => {
+            if state.pc + 1 >= len {
+                return false;
+            }
+            let offset = tape[state.pc + 1] as i8;
+            let new_pc = state.pc as isize + 2 + offset as isize;
+            if new_pc < 0 {
+                return false;
+            }
+            state.pc = new_pc as usize;
+            return true;
+        }
+        JZ => {
+            if state.pc + 1 >= len {
+                return false;
+            }
+            if state.acc == 0 {
+                let offset = tape[state.pc + 1] as i8;
+                let new_pc = state.pc as isize + 2 + offset as isize;
+                if new_pc < 0 {
+                    return false;
+                }
+                state.pc = new_pc as usize;
+                return true;
+            }
+            state.pc += 2;
+            return true;
+        }
+        JNZ => {
+            if state.pc + 1 >= len {
+                return false;
+            }
+            if state.acc != 0 {
+                let offset = tape[state.pc + 1] as i8;
+                let new_pc = state.pc as isize + 2 + offset as isize;
+                if new_pc < 0 {
+                    return false;
+                }
+                state.pc = new_pc as usize;
+                return true;
+            }
+            state.pc += 2;
+            return true;
+        }
+        SKIP_EQ => {
+            let r = tape[state.rp as usize % len];
+            let w = tape[wp as usize % len];
+            if r == w {
+                state.pc += 2;
+                return true;
+            }
+        }
+        GET_DELAY => {
+            state.acc = state.delay;
+        }
+        SET_RP => {
+            state.rp = state.acc;
+        }
+        _ => {} // NOP (0x10-0xFF)
+    }
+    state.pc += 1;
+    true
+}
+
 impl Substrate for Echo {
     fn execute(tape: &mut [u8], step_limit: usize) -> usize {
         let len = tape.len();
@@ -152,6 +270,42 @@ impl Substrate for Echo {
             pc += 1;
         }
 
+        steps
+    }
+
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        let len = tape.len();
+        if len == 0 {
+            return 0;
+        }
+        let mut a = EchoBattleState {
+            pc: 0,
+            rp: 0,
+            delay: ps as u8,
+            acc: 0,
+        };
+        let mut b = EchoBattleState {
+            pc: ps,
+            rp: ps as u8,
+            delay: ps as u8,
+            acc: 0,
+        };
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                halted_a = !echo_battle_step(&mut a, tape);
+                steps += 1;
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                halted_b = !echo_battle_step(&mut b, tape);
+                steps += 1;
+            }
+        }
         steps
     }
 

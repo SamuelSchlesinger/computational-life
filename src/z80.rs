@@ -159,6 +159,72 @@ impl Substrate for Z80 {
         Z80_CPU.with_borrow_mut(|cpu| execute_cpu(cpu, tape, step_limit))
     }
 
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        if tape.is_empty() {
+            return 0;
+        }
+        let max_reads = tape.len().max(16);
+
+        // Create two local CPU instances (NOT thread-local)
+        let mut cpu_a = Cpu::new();
+        let mut cpu_b = Cpu::new();
+
+        // Reset and set initial PCs
+        {
+            let mut _machine = TapeMachine {
+                tape,
+                reads_left: Cell::new(max_reads),
+            };
+            // Reset cpu_a, set PC=0
+            cpu_a.registers().set_pc(0);
+            cpu_a.registers().set16(Reg16::AF, 0xFFFF);
+            cpu_a.registers().set16(Reg16::SP, 0xFFFF);
+            cpu_a.registers().set16(Reg16::BC, 0);
+            cpu_a.registers().set16(Reg16::DE, 0);
+            cpu_a.registers().set16(Reg16::HL, 0);
+            cpu_a.registers().set16(Reg16::IX, 0);
+            cpu_a.registers().set16(Reg16::IY, 0);
+            // Reset cpu_b, set PC=ps
+            cpu_b.registers().set_pc(ps as u16);
+            cpu_b.registers().set16(Reg16::AF, 0xFFFF);
+            cpu_b.registers().set16(Reg16::SP, 0xFFFF);
+            cpu_b.registers().set16(Reg16::BC, 0);
+            cpu_b.registers().set16(Reg16::DE, 0);
+            cpu_b.registers().set16(Reg16::HL, 0);
+            cpu_b.registers().set16(Reg16::IX, 0);
+            cpu_b.registers().set16(Reg16::IY, 0);
+        }
+
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                let mut machine = TapeMachine {
+                    tape,
+                    reads_left: Cell::new(max_reads),
+                };
+                cpu_a.execute_instruction(&mut machine);
+                steps += 1;
+                halted_a = cpu_a.is_halted();
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                let mut machine = TapeMachine {
+                    tape,
+                    reads_left: Cell::new(max_reads),
+                };
+                cpu_b.execute_instruction(&mut machine);
+                steps += 1;
+                halted_b = cpu_b.is_halted();
+            }
+        }
+        steps
+    }
+
     fn is_instruction(_byte: u8) -> bool {
         // Both Z80 opcode tables are fully populated — every byte decodes
         // to some instruction (including prefix bytes like CB, DD, ED, FD).
@@ -180,6 +246,72 @@ pub struct I8080;
 impl Substrate for I8080 {
     fn execute(tape: &mut [u8], step_limit: usize) -> usize {
         I8080_CPU.with_borrow_mut(|cpu| execute_cpu(cpu, tape, step_limit))
+    }
+
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        if tape.is_empty() {
+            return 0;
+        }
+        let max_reads = tape.len().max(16);
+
+        // Create two local CPU instances (NOT thread-local)
+        let mut cpu_a = Cpu::new_8080();
+        let mut cpu_b = Cpu::new_8080();
+
+        // Reset and set initial PCs
+        {
+            let mut _machine = TapeMachine {
+                tape,
+                reads_left: Cell::new(max_reads),
+            };
+            // Reset cpu_a, set PC=0
+            cpu_a.registers().set_pc(0);
+            cpu_a.registers().set16(Reg16::AF, 0xFFFF);
+            cpu_a.registers().set16(Reg16::SP, 0xFFFF);
+            cpu_a.registers().set16(Reg16::BC, 0);
+            cpu_a.registers().set16(Reg16::DE, 0);
+            cpu_a.registers().set16(Reg16::HL, 0);
+            cpu_a.registers().set16(Reg16::IX, 0);
+            cpu_a.registers().set16(Reg16::IY, 0);
+            // Reset cpu_b, set PC=ps
+            cpu_b.registers().set_pc(ps as u16);
+            cpu_b.registers().set16(Reg16::AF, 0xFFFF);
+            cpu_b.registers().set16(Reg16::SP, 0xFFFF);
+            cpu_b.registers().set16(Reg16::BC, 0);
+            cpu_b.registers().set16(Reg16::DE, 0);
+            cpu_b.registers().set16(Reg16::HL, 0);
+            cpu_b.registers().set16(Reg16::IX, 0);
+            cpu_b.registers().set16(Reg16::IY, 0);
+        }
+
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                let mut machine = TapeMachine {
+                    tape,
+                    reads_left: Cell::new(max_reads),
+                };
+                cpu_a.execute_instruction(&mut machine);
+                steps += 1;
+                halted_a = cpu_a.is_halted();
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                let mut machine = TapeMachine {
+                    tape,
+                    reads_left: Cell::new(max_reads),
+                };
+                cpu_b.execute_instruction(&mut machine);
+                steps += 1;
+                halted_b = cpu_b.is_halted();
+            }
+        }
+        steps
     }
 
     fn is_instruction(_byte: u8) -> bool {

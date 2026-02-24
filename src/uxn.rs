@@ -78,6 +78,50 @@ impl Substrate for Uxn {
         steps
     }
 
+    fn execute_battle(tape: &mut [u8], ps: usize, step_limit: usize) -> usize {
+        if tape.is_empty() {
+            return 0;
+        }
+        let mut state_a = UxnMachineState::new();
+        let mut state_b = UxnMachineState::new();
+        let mut pc_a: u16 = 0;
+        let mut pc_b: u16 = ps as u16;
+        let mut bus = NullBus;
+
+        let mut steps = 0;
+        let mut halted_a = false;
+        let mut halted_b = false;
+
+        while steps < step_limit && (!halted_a || !halted_b) {
+            if !halted_a {
+                let mut memory = TapeMemory { tape };
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    execute_operation(&mut state_a, pc_a, &mut memory, &mut bus)
+                }));
+                steps += 1;
+                match result {
+                    Ok((_opcode, Some(npc))) => pc_a = npc,
+                    Ok((_, None)) | Err(_) => halted_a = true,
+                }
+                if steps >= step_limit {
+                    break;
+                }
+            }
+            if !halted_b {
+                let mut memory = TapeMemory { tape };
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    execute_operation(&mut state_b, pc_b, &mut memory, &mut bus)
+                }));
+                steps += 1;
+                match result {
+                    Ok((_opcode, Some(npc))) => pc_b = npc,
+                    Ok((_, None)) | Err(_) => halted_b = true,
+                }
+            }
+        }
+        steps
+    }
+
     fn is_instruction(_byte: u8) -> bool {
         true // All 256 values are valid Uxn opcodes
     }

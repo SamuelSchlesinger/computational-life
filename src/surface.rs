@@ -9,6 +9,30 @@ use rayon::prelude::*;
 
 use crate::substrate::Substrate;
 
+// ─── Interaction mode ────────────────────────────────────────────────────────
+
+/// How two neighboring programs interact when paired during an epoch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum InteractionMode {
+    /// Current behavior: concatenate [A|B] and execute from position 0.
+    #[default]
+    Normal,
+    /// Both programs get their own instruction pointer on the shared tape,
+    /// with execution interleaved one instruction at a time.
+    Battling,
+}
+
+impl InteractionMode {
+    pub const ALL: [InteractionMode; 2] = [InteractionMode::Normal, InteractionMode::Battling];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            InteractionMode::Normal => "Normal",
+            InteractionMode::Battling => "Battling",
+        }
+    }
+}
+
 // ─── Dijkstra helper ─────────────────────────────────────────────────────────
 
 #[derive(Clone, PartialEq)]
@@ -1221,6 +1245,8 @@ pub struct SoupSurfaceConfig {
     pub step_limit: usize,
     /// Per-byte mutation probability per epoch.
     pub mutation_rate: f64,
+    /// How paired programs interact during execution.
+    pub interaction_mode: InteractionMode,
 }
 
 /// A primordial soup simulation running on a triangle mesh surface.
@@ -1328,9 +1354,18 @@ impl SoupSurface {
             self.tape_pool[base + ps..base + tape_size].copy_from_slice(&self.programs[second]);
         }
 
-        self.tape_pool.par_chunks_mut(tape_size).for_each(|tape| {
-            S::execute(tape, step_limit);
-        });
+        match self.config.interaction_mode {
+            InteractionMode::Normal => {
+                self.tape_pool.par_chunks_mut(tape_size).for_each(|tape| {
+                    S::execute(tape, step_limit);
+                });
+            }
+            InteractionMode::Battling => {
+                self.tape_pool.par_chunks_mut(tape_size).for_each(|tape| {
+                    S::execute_battle(tape, ps, step_limit);
+                });
+            }
+        }
 
         for (i, &(first, second)) in self.pairs.iter().enumerate() {
             let base = i * tape_size;
@@ -1490,6 +1525,7 @@ mod tests {
                 program_size: 16,
                 step_limit: 256,
                 mutation_rate: 0.001,
+                interaction_mode: InteractionMode::Normal,
             };
             let mut soup = SoupSurface::new(mesh, config, seed);
             for _ in 0..10 {
@@ -1537,6 +1573,7 @@ f 4 1 5 8
             program_size: 16,
             step_limit: 256,
             mutation_rate: 0.0,
+            interaction_mode: InteractionMode::Normal,
         };
         let mut soup = SoupSurface::new(mesh, config, 42);
         let before = soup.programs.clone();
@@ -1554,6 +1591,7 @@ f 4 1 5 8
             program_size: 64,
             step_limit: 8192,
             mutation_rate: 0.00024,
+            interaction_mode: InteractionMode::Normal,
         };
         let mut soup = SoupSurface::new(mesh, config, 42);
 

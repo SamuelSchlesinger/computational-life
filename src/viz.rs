@@ -22,7 +22,9 @@ use crate::rig::Rig;
 use crate::skim::Skim;
 use crate::subleq::{Rsubleq4, Subleq};
 use crate::substrate::Substrate;
-use crate::surface::{SoupSurface, SoupSurfaceConfig, SurfaceMesh, SurfaceSpec, face_normal};
+use crate::surface::{
+    InteractionMode, SoupSurface, SoupSurfaceConfig, SurfaceMesh, SurfaceSpec, face_normal,
+};
 use crate::uxn::Uxn;
 use crate::z80::{I8080, Z80};
 
@@ -296,6 +298,7 @@ pub struct MenuConfig {
     pub metrics_interval: usize,
     pub color_mode: ColorMode,
     pub blur: f32,
+    pub interaction_mode: InteractionMode,
 }
 
 impl Default for MenuConfig {
@@ -310,6 +313,7 @@ impl Default for MenuConfig {
             metrics_interval: 25,
             color_mode: ColorMode::Hash,
             blur: 0.0,
+            interaction_mode: InteractionMode::Normal,
         }
     }
 }
@@ -338,6 +342,7 @@ impl MenuConfig {
             metrics_interval,
             color_mode: ColorMode::Hash,
             blur,
+            interaction_mode: InteractionMode::Normal,
         }
     }
 }
@@ -1243,6 +1248,15 @@ fn render_menu_ui(
                 menu.program_size = menu.substrate.default_program_size();
                 menu.step_limit = menu.substrate.default_step_limit();
             }
+            ui.add_space(4.0);
+
+            egui::ComboBox::from_label("Interaction mode")
+                .selected_text(menu.interaction_mode.label())
+                .show_ui(ui, |ui| {
+                    for mode in InteractionMode::ALL {
+                        ui.selectable_value(&mut menu.interaction_mode, mode, mode.label());
+                    }
+                });
             ui.add_space(12.0);
 
             // Surface parameters (shared helper).
@@ -1359,6 +1373,7 @@ fn enter_simulation(
         program_size: menu.program_size,
         step_limit: menu.step_limit,
         mutation_rate: menu.mutation_rate,
+        interaction_mode: menu.interaction_mode,
     };
 
     let (metrics_rx, snap_rx, cmd_tx, prog_rx) = spawn_sim_thread(
